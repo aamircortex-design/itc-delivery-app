@@ -478,6 +478,13 @@ app.get('/setup', async (req, res) => {
   res.redirect(303, user ? '/login' : '/setup.html');
 });
 
+app.get('/setup.html', async (req, res) => {
+  if (req.user) return res.redirect(303, req.user.role === 'admin' ? '/users' : '/');
+  const user = await req.app.locals.db.get('SELECT id FROM users LIMIT 1');
+  if (user) return res.redirect(303, '/login.html');
+  res.sendFile(path.join(__dirname, 'public', 'setup.html'));
+});
+
 app.get('/company-setup', (req, res) => {
   if (req.user) return res.redirect(303, '/');
   res.sendFile(path.join(__dirname, 'public', 'company-setup.html'));
