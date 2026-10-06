@@ -25,6 +25,8 @@ async function readResponse(response) {
 if (form) {
   form.addEventListener('submit', async event => {
     event.preventDefault();
+    const emailInput = form.querySelector('input[name="email"]');
+    if (emailInput) emailInput.value = emailInput.value.trim();
     if (!form.reportValidity()) return;
 
     const submit = form.querySelector('[type="submit"]');
