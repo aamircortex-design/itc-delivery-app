@@ -37,6 +37,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .auth-field input::placeholder { color: #a1aaa5; }
 .auth-field input:focus { border-color: #85b397; outline: none; box-shadow: 0 0 0 3px rgba(25, 118, 80, .08); }
 .auth-field-hint { color: #96a099; font-size: 9px; font-weight: 400; }
+#company-workspace-name { min-height: 35px; padding: 10px 11px; border: 1px solid var(--auth-line); border-radius: 6px; color: #2c3a31; background: #f8faf9; font-size: 10px; font-weight: 500; }
 .auth-submit { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 8px; margin-top: 4px; border: 0; border-radius: 6px; color: #fff; background: var(--auth-green); box-shadow: 0 2px 4px rgba(15, 82, 54, .12); font-size: 11px; font-weight: 600; }
 .auth-submit:hover { background: var(--auth-green-dark); }
 .auth-submit:disabled { cursor: wait; opacity: .65; }

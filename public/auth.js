@@ -66,6 +66,8 @@ async function loadUsers() {
       readResponse(await fetch('/api/users')),
       readResponse(await fetch('/api/auth/session'))
     ]);
+    const workspaceName = document.querySelector('#company-workspace-name');
+    if (workspaceName) workspaceName.textContent = session.user.companyName;
     if (!users.length) {
       list.innerHTML = '<tr><td colspan="5" class="user-list-empty">No team members yet.</td></tr>';
       return;

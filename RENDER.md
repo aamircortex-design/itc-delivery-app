@@ -26,3 +26,15 @@ Render by deployment. A new Render disk starts with an empty database. Plan a se
 and verified database migration before switching live delivery work to the hosted
 service; keep the local source database and a backup unchanged until the hosted copy
 has been checked.
+
+## Company workspaces
+
+- Each company can create its own workspace from the sign-in page. The person who
+  creates it becomes its first administrator; that administrator adds the company's
+  other users from **Manage users**.
+- Users in a workspace share that company's delivery records. The server scopes
+  delivery, assignment, export, and user-management operations to the signed-in user's
+  workspace. User IDs must be unique across the app.
+- On an existing database, startup migration keeps the existing users and delivery
+  records together in their current company workspace. Back up the persistent database
+  before deploying schema changes.

@@ -19,6 +19,8 @@ const publicPaths = new Set([
   '/login.html',
   '/setup',
   '/setup.html',
+  '/company-setup.html',
+  '/company-setup',
   '/auth.css',
   '/auth.js',
   '/styles.css',
@@ -29,7 +31,8 @@ const publicPaths = new Set([
   '/icons/taf-disti-desk.svg',
   '/health',
   '/api/auth/login',
-  '/api/auth/setup'
+  '/api/auth/setup',
+  '/api/auth/company-setup'
 ]);
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -148,9 +151,11 @@ async function authenticateRequest(req, res, next) {
     if (token) {
       req.user = await req.app.locals.db.get(
         `SELECT users.id, users.full_name AS fullName, users.position,
-                users.company_name AS companyName, users.user_id AS userId, users.role
+                companies.name AS companyName, users.company_id AS companyId,
+                users.user_id AS userId, users.role
          FROM auth_sessions
          JOIN users ON users.id = auth_sessions.user_id
+         JOIN companies ON companies.id = users.company_id
          WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ?`,
         [getSessionTokenHash(token), new Date().toISOString()]
       );
@@ -225,10 +230,22 @@ app.post('/api/auth/setup', async (req, res) => {
       return res.status(409).json({ error: 'Initial setup is already complete. Sign in with an administrator account.' });
     }
 
+    const existingCompany = await req.app.locals.db.get('SELECT id FROM companies ORDER BY id LIMIT 1');
+    let companyId;
+    if (existingCompany) {
+      companyId = existingCompany.id;
+      await req.app.locals.db.run('UPDATE companies SET name = ? WHERE id = ?', [user.companyName, companyId]);
+    } else {
+      const company = await req.app.locals.db.run(
+        'INSERT INTO companies (name) VALUES (?)',
+        [user.companyName]
+      );
+      companyId = company.lastID;
+    }
     const result = await req.app.locals.db.run(
-      `INSERT INTO users (full_name, position, company_name, user_id, password_salt, password_hash, role)
-       VALUES (?, ?, ?, ?, ?, ?, 'admin')`,
-      [user.fullName, user.position, user.companyName, user.userId, password.salt, password.hash]
+      `INSERT INTO users (full_name, position, company_id, company_name, user_id, password_salt, password_hash, role)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'admin')`,
+      [user.fullName, user.position, companyId, user.companyName, user.userId, password.salt, password.hash]
     );
     const token = await issueSession(req.app.locals.db, result.lastID);
     await req.app.locals.db.exec('COMMIT');
@@ -248,6 +265,41 @@ app.post('/api/auth/setup', async (req, res) => {
   }
 });
 
+app.post('/api/auth/company-setup', async (req, res) => {
+  let transactionOpen = false;
+  try {
+    const user = validateUserDetails(req.body);
+    const password = await hashPassword(user.password);
+    const db = req.app.locals.db;
+    await db.exec('BEGIN IMMEDIATE');
+    transactionOpen = true;
+    const company = await db.run(
+      'INSERT INTO companies (name) VALUES (?)',
+      [user.companyName]
+    );
+    const result = await db.run(
+      `INSERT INTO users (full_name, position, company_id, company_name, user_id, password_salt, password_hash, role)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'admin')`,
+      [user.fullName, user.position, company.lastID, user.companyName, user.userId, password.salt, password.hash]
+    );
+    const token = await issueSession(db, result.lastID);
+    await db.exec('COMMIT');
+    transactionOpen = false;
+    setSessionCookie(res, token);
+    res.status(201).json({ message: 'Company workspace created.' });
+  } catch (error) {
+    if (transactionOpen) await req.app.locals.db.exec('ROLLBACK');
+    if (error.message.startsWith('SQLITE_CONSTRAINT')) {
+      return res.status(409).json({ error: 'That user ID is already in use. Choose another one.' });
+    }
+    if (/Enter |User ID|Password|role/i.test(error.message)) {
+      return res.status(400).json({ error: error.message });
+    }
+    console.error('Could not create company workspace:', error);
+    res.status(500).json({ error: 'Could not create the company workspace. Please try again.' });
+  }
+});
+
 app.use(authenticateRequest);
 
 app.get('/login', async (req, res) => {
@@ -260,6 +312,11 @@ app.get('/setup', async (req, res) => {
   if (req.user) return res.redirect(303, req.user.role === 'admin' ? '/users' : '/');
   const user = await req.app.locals.db.get('SELECT id FROM users LIMIT 1');
   res.redirect(303, user ? '/login' : '/setup.html');
+});
+
+app.get('/company-setup', (req, res) => {
+  if (req.user) return res.redirect(303, '/');
+  res.sendFile(path.join(__dirname, 'public', 'company-setup.html'));
 });
 
 app.get('/users', (req, res) => {
@@ -288,9 +345,11 @@ app.get('/api/auth/session', (req, res) => {
 app.get('/api/users', async (req, res) => {
   try {
     const users = await req.app.locals.db.all(
-      `SELECT id, full_name AS fullName, position, company_name AS companyName,
-              user_id AS userId, role, created_at AS createdAt
-       FROM users ORDER BY full_name COLLATE NOCASE`
+      `SELECT users.id, users.full_name AS fullName, users.position, companies.name AS companyName,
+              users.user_id AS userId, users.role, users.created_at AS createdAt
+       FROM users JOIN companies ON companies.id = users.company_id
+       WHERE users.company_id = ? ORDER BY full_name COLLATE NOCASE`,
+      [req.user.companyId]
     );
     res.json(users);
   } catch (error) {
@@ -301,12 +360,12 @@ app.get('/api/users', async (req, res) => {
 
 app.post('/api/users', async (req, res) => {
   try {
-    const user = validateUserDetails(req.body);
+    const user = validateUserDetails({ ...req.body, companyName: req.user.companyName });
     const password = await hashPassword(user.password);
     const result = await req.app.locals.db.run(
-      `INSERT INTO users (full_name, position, company_name, user_id, password_salt, password_hash, role)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [user.fullName, user.position, user.companyName, user.userId, password.salt, password.hash, user.role]
+      `INSERT INTO users (full_name, position, company_id, company_name, user_id, password_salt, password_hash, role)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [user.fullName, user.position, req.user.companyId, req.user.companyName, user.userId, password.salt, password.hash, user.role]
     );
     res.status(201).json({ message: 'User created successfully.', id: result.lastID });
   } catch (error) {
@@ -335,14 +394,14 @@ app.delete('/api/users/:id', async (req, res) => {
   try {
     await db.exec('BEGIN IMMEDIATE');
     transactionOpen = true;
-    const user = await db.get('SELECT id, role FROM users WHERE id = ?', [userId]);
+    const user = await db.get('SELECT id, role FROM users WHERE id = ? AND company_id = ?', [userId, req.user.companyId]);
     if (!user) {
       await db.exec('ROLLBACK');
       transactionOpen = false;
       return res.status(404).json({ error: 'User not found.' });
     }
     if (user.role === 'admin') {
-      const admins = await db.get("SELECT COUNT(*) AS count FROM users WHERE role = 'admin'");
+      const admins = await db.get("SELECT COUNT(*) AS count FROM users WHERE company_id = ? AND role = 'admin'", [req.user.companyId]);
       if (admins.count <= 1) {
         await db.exec('ROLLBACK');
         transactionOpen = false;
@@ -367,7 +426,8 @@ app.get('/api/delivery-partners', async (req, res) => {
   try {
     const partners = await req.app.locals.db.all(
       `SELECT id, full_name AS fullName FROM users
-       WHERE role = 'delivery_partner' ORDER BY full_name COLLATE NOCASE`
+       WHERE company_id = ? AND role = 'delivery_partner' ORDER BY full_name COLLATE NOCASE`,
+      [req.user.companyId]
     );
     res.json(partners);
   } catch (error) {
@@ -389,18 +449,21 @@ app.patch('/api/bills/:id/assignment', async (req, res) => {
 
   try {
     const db = req.app.locals.db;
-    const bill = await db.get('SELECT id FROM bills WHERE id = ?', [billId]);
+    const bill = await db.get(
+      'SELECT id FROM bills WHERE id = ? AND company_id = ?',
+      [billId, req.user.companyId]
+    );
     if (!bill) return res.status(404).json({ error: 'Delivery not found.' });
     if (partnerId !== null) {
       const partner = await db.get(
-        "SELECT id FROM users WHERE id = ? AND role = 'delivery_partner'",
-        [partnerId]
+        "SELECT id FROM users WHERE id = ? AND company_id = ? AND role = 'delivery_partner'",
+        [partnerId, req.user.companyId]
       );
       if (!partner) return res.status(400).json({ error: 'Choose an active delivery partner.' });
     }
     await db.run(
-      'UPDATE bills SET assigned_to = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-      [partnerId, billId]
+      'UPDATE bills SET assigned_to = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND company_id = ?',
+      [partnerId, billId, req.user.companyId]
     );
     res.json({ message: 'Delivery assignment saved.' });
   } catch (error) {
@@ -723,8 +786,8 @@ app.post('/api/bills/upload', upload.single('file'), async (req, res) => {
       }
 
       let bill = await req.app.locals.db.get(
-        'SELECT id, delivery_date FROM bills WHERE bill_no = ?',
-        [row.billno]
+        'SELECT id, delivery_date FROM bills WHERE company_id = ? AND bill_no = ?',
+        [req.user.companyId, row.billno]
       );
 
       if (bill && bill.delivery_date === selectedDate) {
@@ -741,18 +804,21 @@ app.post('/api/bills/upload', upload.single('file'), async (req, res) => {
       }
 
       await req.app.locals.db.run(
-        `INSERT INTO bills (bill_no, outlet_name, address, delivery_date)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(bill_no) DO UPDATE SET
+        `INSERT INTO bills (company_id, bill_no, outlet_name, address, delivery_date)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(company_id, bill_no) DO UPDATE SET
            outlet_name = excluded.outlet_name,
            address = excluded.address,
            delivery_date = excluded.delivery_date,
            updated_at = CURRENT_TIMESTAMP
          WHERE bills.delivery_date = ''`,
-        [row.billno, row.outletname, row.address, row.deliveryDate]
+        [req.user.companyId, row.billno, row.outletname, row.address, row.deliveryDate]
       );
 
-      bill = await req.app.locals.db.get('SELECT id, delivery_date FROM bills WHERE bill_no = ?', [row.billno]);
+      bill = await req.app.locals.db.get(
+        'SELECT id, delivery_date FROM bills WHERE company_id = ? AND bill_no = ?',
+        [req.user.companyId, row.billno]
+      );
       if (bill.delivery_date !== selectedDate) {
         const error = new Error(`Bill ${row.billno} is already recorded for another sales date.`);
         error.statusCode = 409;
@@ -784,8 +850,8 @@ app.post('/api/bills/upload', upload.single('file'), async (req, res) => {
         [billId]
       );
       await req.app.locals.db.run(
-        'UPDATE bills SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-        [getBillStatus(totals), billId]
+        'UPDATE bills SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND company_id = ?',
+        [getBillStatus(totals), billId, req.user.companyId]
       );
     }
 
@@ -822,9 +888,9 @@ app.get('/api/bills/export', async (req, res) => {
     const db = req.app.locals.db;
     const bills = await db.all(
       `SELECT * FROM bills
-       WHERE delivery_date = ? OR (delivery_date = '' AND substr(created_at, 1, 10) = ?)
+       WHERE company_id = ? AND (delivery_date = ? OR (delivery_date = '' AND substr(created_at, 1, 10) = ?))
        ORDER BY bill_no`,
-      [selectedDate, selectedDate]
+      [req.user.companyId, selectedDate, selectedDate]
     );
 
     if (!bills.length) {
@@ -944,12 +1010,14 @@ app.get('/api/bills', async (req, res) => {
       ? await db.all(
         `SELECT bills.*, users.full_name AS assigned_partner_name, users.id AS assigned_to
          FROM bills LEFT JOIN users ON users.id = bills.assigned_to
-         WHERE bills.assigned_to = ? ORDER BY bills.id DESC`,
-        [req.user.id]
+         WHERE bills.company_id = ? AND bills.assigned_to = ? ORDER BY bills.id DESC`,
+        [req.user.companyId, req.user.id]
       )
       : await db.all(
         `SELECT bills.*, users.full_name AS assigned_partner_name, users.id AS assigned_to
-         FROM bills LEFT JOIN users ON users.id = bills.assigned_to ORDER BY bills.id DESC`
+         FROM bills LEFT JOIN users ON users.id = bills.assigned_to
+         WHERE bills.company_id = ? ORDER BY bills.id DESC`,
+        [req.user.companyId]
       );
     for (const bill of bills) {
       bill.items = await db.all('SELECT * FROM bill_items WHERE bill_id = ? ORDER BY id', [bill.id]);
@@ -976,8 +1044,14 @@ app.post('/api/bills/reconcile', async (req, res) => {
       return res.status(403).json({ error: 'Managers assign deliveries; only the assigned delivery partner or an administrator can update progress.' });
     }
     const bill = req.user.role === 'delivery_partner'
-      ? await db.get('SELECT id FROM bills WHERE id = ? AND assigned_to = ?', [Number(billId), req.user.id])
-      : await db.get('SELECT id FROM bills WHERE id = ?', [Number(billId)]);
+      ? await db.get(
+        'SELECT id FROM bills WHERE id = ? AND company_id = ? AND assigned_to = ?',
+        [Number(billId), req.user.companyId, req.user.id]
+      )
+      : await db.get(
+        'SELECT id FROM bills WHERE id = ? AND company_id = ?',
+        [Number(billId), req.user.companyId]
+      );
     if (!bill) {
       await db.exec('ROLLBACK');
       return res.status(404).json({ error: 'Delivery not found.' });
@@ -1020,8 +1094,8 @@ app.post('/api/bills/reconcile', async (req, res) => {
     const status = getBillStatus(totals);
 
     await db.run(
-      'UPDATE bills SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-      [status, Number(billId)]
+      'UPDATE bills SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND company_id = ?',
+      [status, Number(billId), req.user.companyId]
     );
     await db.exec('COMMIT');
     res.json({ message: 'Delivery progress saved.', status });
