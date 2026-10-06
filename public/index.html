@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#14251f">
+    <meta name="description" content="A simple dashboard for importing and tracking deliveries.">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/icons/taf-disti-desk.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/icons/taf-disti-desk.svg">
+    <title>TAF Disti Desk | Deliveries</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/pwa.js" defer></script>
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Main navigation">
+        <a class="brand" href="/" aria-label="TAF Disti Desk home">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="m3.5 7.8 8.5 4.4 8.5-4.4M12 12.4V21M7.5 5.3l9 4.6" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+          </span>
+          <span>TAF <span class="brand-light">Disti Desk</span></span>
+        </a>
+
+        <div class="nav-caption">WORKSPACE</div>
+        <nav class="side-nav">
+          <a class="nav-link" href="#overview">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/></svg>
+            Overview
+          </a>
+          <a class="nav-link active" href="#deliveries" aria-current="page">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 6.5h11v11H3zM14 10h3.3l3.2 3.5v4H14z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="7.5" cy="18" r="2" fill="#14251f" stroke="currentColor" stroke-width="1.7"/><circle cx="17.5" cy="18" r="2" fill="#14251f" stroke="currentColor" stroke-width="1.7"/></svg>
+            Deliveries
+            <span class="nav-count" id="nav-count">0</span>
+          </a>
+          <a class="nav-link" id="user-management-link" href="/users" hidden>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="9" cy="8" r="3" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 19c.5-3 2.4-4.5 5.5-4.5s5 1.5 5.5 4.5M16 7.5a2.8 2.8 0 0 1 0 5.5M17 15c2.1.5 3.3 1.8 3.6 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+            Manage users
+          </a>
+        </nav>
+
+        <div class="sidebar-bottom">
+          <div class="help-card">
+            <div class="help-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.6"/><path d="M9.7 9.2a2.4 2.4 0 1 1 4.3 1.5c-.8 1-2 1.1-2 2.6M12 16.6v.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+            </div>
+            <p class="help-title">Need a hand?</p>
+            <p class="help-copy">Use the sample sheet to format your delivery list.</p>
+            <button class="help-link" id="download-template" type="button">Get sample sheet <span aria-hidden="true">↗</span></button>
+          </div>
+          <div class="profile">
+            <div class="avatar" id="profile-avatar" aria-hidden="true">U</div>
+            <div class="profile-info"><strong id="profile-name">User</strong><span id="profile-role">Delivery team</span></div>
+            <button class="profile-logout" data-logout type="button" aria-label="Sign out" title="Sign out">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M10 4H5.5A1.5 1.5 0 0 0 4 5.5v13A1.5 1.5 0 0 0 5.5 20H10M14 8l4 4-4 4m4-4H9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div class="breadcrumbs"><span>Workspace</span><span class="crumb-divider">/</span><strong>Deliveries</strong></div>
+          <div class="topbar-right">
+            <button class="button button-secondary install-button" data-install-app type="button" hidden>Install app</button>
+            <label class="day-picker">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2" stroke="currentColor" stroke-width="1.7"/><path d="M7.5 3.5v3M16.5 3.5v3M3.5 9h17" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+              <span class="visually-hidden">Show deliveries for date</span>
+              <input id="dashboard-date" type="date" aria-label="Show deliveries for date">
+            </label>
+            <button class="button button-secondary export-button" id="export-day" type="button" disabled>
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v11m0 0 4-4m-4 4-4-4M5 15v4h14v-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span>Export Excel</span>
+            </button>
+            <span class="topbar-divider" aria-hidden="true"></span>
+            <button class="top-avatar" id="top-profile-avatar" type="button" data-logout aria-label="Sign out">U</button>
+          </div>
+        </header>
+
+        <div class="page-content" id="overview">
+          <section class="page-heading">
+            <div>
+              <div class="eyebrow"><span class="eyebrow-dot"></span> DELIVERY OPERATIONS</div>
+              <h1 id="page-heading-title">Your deliveries, <span>in one place.</span></h1>
+              <p class="page-subtitle" id="page-heading-copy">Import your order sheet and keep every drop-off on track.</p>
+            </div>
+            <button class="button button-primary" id="open-upload" type="button">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 15V4m0 0L8 8m4-4 4 4M5 14v5h14v-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Import deliveries
+            </button>
+          </section>
+
+          <section class="stat-grid" aria-label="Delivery summary">
+            <article class="stat-card">
+              <div class="stat-top"><span>Total deliveries</span><span class="stat-icon icon-neutral"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 6.5h11v11H3zM14 10h3.3l3.2 3.5v4H14z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="7.5" cy="18" r="1.7" stroke="currentColor" stroke-width="1.5"/><circle cx="17.5" cy="18" r="1.7" stroke="currentColor" stroke-width="1.5"/></svg></span></div>
+              <div class="stat-value" id="total-count">—</div>
+              <div class="stat-foot"><span class="stat-dot neutral-dot"></span><span id="total-copy">All imported orders</span></div>
+            </article>
+            <article class="stat-card">
+              <div class="stat-top"><span>Bills with pending items</span><span class="stat-icon icon-amber"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.7"/><path d="M12 7.5v5l3.2 1.9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+              <div class="stat-value" id="pending-count">—</div>
+              <div class="stat-foot"><span class="stat-dot amber-dot"></span><span id="pending-unit-copy">Units still to deliver</span></div>
+            </article>
+            <article class="stat-card">
+              <div class="stat-top"><span>In progress</span><span class="stat-icon icon-blue"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 15.5 9 10l3.5 3.5L20 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 6h5v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+              <div class="stat-value" id="progress-count">—</div>
+              <div class="stat-foot"><span class="stat-dot blue-dot"></span> Partially delivered</div>
+            </article>
+            <article class="stat-card">
+              <div class="stat-top"><span>Completed</span><span class="stat-icon icon-green"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6.5 12.5 3.6 3.6 7.7-8.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.7"/></svg></span></div>
+              <div class="stat-value" id="completed-count">—</div>
+              <div class="stat-foot"><span class="stat-dot green-dot"></span> Delivered or returned</div>
+            </article>
+          </section>
+
+          <section class="deliveries-panel" id="deliveries">
+            <div class="panel-heading">
+              <div>
+                <div class="panel-title-row"><h2 id="delivery-heading">All deliveries</h2><span class="result-count" id="result-count">0 orders</span></div>
+                <p class="panel-subtitle" id="panel-subtitle">View orders and update delivery progress for the selected day.</p>
+              </div>
+              <div class="table-controls">
+                <label class="search-box">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8" stroke="currentColor" stroke-width="1.7"/><path d="m16 16 4.3 4.3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                  <span class="visually-hidden">Search deliveries</span>
+                  <input id="search-input" type="search" placeholder="Search deliveries..." autocomplete="off">
+                  <kbd>/</kbd>
+                </label>
+                <label class="filter-select">
+                  <span class="visually-hidden">Filter by status</span>
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16M7 12h10m-7 5h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                  <select id="status-filter">
+                    <option value="All">All status</option>
+                    <option value="Pending">Pending</option>
+                    <option value="In progress">In progress</option>
+                    <option value="Completed">Completed</option>
+                    <option value="Returned">Returned</option>
+                  </select>
+                  <svg class="select-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m7 10 5 5 5-5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </label>
+              </div>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>DELIVERY</th><th>OUTLET &amp; DELIVERY AREA</th><th>ITEMS</th><th>PROGRESS</th><th>STATUS</th><th id="assigned-header" hidden>DELIVERY PARTNER</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
+                <tbody id="delivery-rows"></tbody>
+              </table>
+              <div class="empty-state" id="empty-state" hidden>
+                <span class="empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M3 6.5h11v11H3zM14 10h3.3l3.2 3.5v4H14z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="7.5" cy="18" r="1.7" stroke="currentColor" stroke-width="1.5"/><circle cx="17.5" cy="18" r="1.7" stroke="currentColor" stroke-width="1.5"/></svg></span>
+                <h3 id="empty-title">Your delivery list is ready</h3>
+                <p id="empty-copy">Import an Excel or CSV file to start tracking your orders.</p>
+                <button class="button button-secondary" id="empty-upload" type="button">Import your first file</button>
+              </div>
+            </div>
+            <div class="table-footer"><span id="table-footer-copy">Showing 0 deliveries</span><span class="footer-note"><span class="footer-live-dot"></span> Up to date</span></div>
+          </section>
+          <footer class="page-footer"><span>Keep your deliveries moving.</span><span>TAF Disti Desk <span class="footer-separator">·</span> Delivery tracker</span><span class="creator-credit">Created by Aamir Rahamn : TAF Technologies</span></footer>
+        </div>
+      </main>
+    </div>
+
+    <dialog class="modal" id="upload-dialog" aria-labelledby="upload-title">
+      <form method="dialog" class="dialog-close-form"><button class="dialog-close" aria-label="Close import dialog" value="cancel" type="submit">×</button></form>
+      <div class="modal-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 15V4m0 0L8 8m4-4 4 4M5 14v5h14v-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <h2 id="upload-title">Import your deliveries</h2>
+      <p class="modal-description">Choose one sales date. For a sales register, only that day’s invoices are added; sales returns are skipped.</p>
+      <label class="date-field" for="import-date">
+        <span>Sales date to import</span>
+        <input id="import-date" type="date" required>
+      </label>
+      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Choose an Excel or CSV file">
+        <span class="dropzone-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 15V4m0 0L8 8m4-4 4 4M5 14v5h14v-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <strong>Drop your file here, or <span>browse</span></strong>
+        <span class="dropzone-hint" id="file-hint">Excel (.xlsx) or CSV · up to 10 MB</span>
+      </div>
+      <input class="visually-hidden" id="file-input" type="file" accept=".xlsx,.csv">
+      <div class="format-note">
+        <strong>Daily sales register columns:</strong>
+        <span>Invoice No., Item Name, Invoice Qty, Outlet Name, Invoice / SR Date. Beat is shown as the delivery area; the register has no street address. The sample sheet is also supported.</span>
+        <button type="button" class="text-link" id="modal-template">Download sample sheet</button>
+      </div>
+      <div class="dialog-error" id="upload-error" role="alert" hidden></div>
+      <div class="modal-actions">
+        <button class="button button-secondary" id="cancel-upload" type="button">Cancel</button>
+        <button class="button button-primary" id="confirm-upload" type="button" disabled>
+          <span id="upload-button-label">Import file</span>
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    </dialog>
+
+    <dialog class="modal reconcile-modal" id="reconcile-dialog" aria-labelledby="reconcile-title">
+      <form method="dialog" class="dialog-close-form"><button class="dialog-close" aria-label="Close delivery update" value="cancel" type="submit">×</button></form>
+      <div class="modal-icon reconcile-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6.5 12.5 3.6 3.6 7.7-8.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.7"/></svg></div>
+      <h2 id="reconcile-title">Update delivery</h2>
+      <p class="modal-description" id="reconcile-subtitle"></p>
+      <form id="reconcile-form">
+        <div class="reconcile-shortcut">
+          <div>
+            <strong>Whole bill delivered?</strong>
+            <span>Fill every item as delivered and clear returns. Item buttons update one line. Save to apply.</span>
+          </div>
+          <button class="button button-secondary" id="fill-bill-delivered" type="button">Mark bill fully delivered</button>
+        </div>
+        <div class="reconcile-list-heading"><span>ITEM</span><span>ORDERED</span><span>DELIVERED</span><span>RETURNED</span></div>
+        <div id="reconcile-items" class="reconcile-items"></div>
+        <div class="dialog-error" id="reconcile-error" role="alert" hidden></div>
+        <div class="modal-actions">
+          <button class="button button-secondary" id="cancel-reconcile" type="button">Cancel</button>
+          <button class="button button-primary" id="save-reconcile" type="submit">Save progress</button>
+        </div>
+      </form>
+    </dialog>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

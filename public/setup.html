@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#f4f6f4">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/icons/taf-disti-desk.svg" type="image/svg+xml">
+    <title>Set up administrator | TAF Disti Desk</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/auth.css">
+    <script src="/pwa.js" defer></script>
+    <script src="/auth.js" defer></script>
+  </head>
+  <body>
+    <div class="auth-shell">
+      <header class="auth-topbar">
+        <a class="auth-brand" href="/">
+          <span class="auth-brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="m3.5 7.8 8.5 4.4 8.5-4.4M12 12.4V21M7.5 5.3l9 4.6" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></span>
+          TAF Disti Desk
+        </a>
+        <div class="auth-topbar-actions">
+          <span class="auth-topbar-note">First-time setup</span>
+          <button class="install-app-button" data-install-app type="button" hidden>Install app</button>
+        </div>
+      </header>
+      <main class="auth-content">
+        <section class="auth-card">
+          <div class="auth-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><circle cx="9" cy="8" r="3.4" stroke="currentColor" stroke-width="1.7"/><path d="M3 20c.4-3.5 2.4-5.3 6-5.3 1.7 0 3 .4 4 1.3M18 11v7m-3.5-3.5h7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <div class="auth-eyebrow">CREATE YOUR SECURE ACCOUNT</div>
+          <h1>Set up your workspace.</h1>
+          <p class="auth-copy">Create the first administrator account. You’ll be able to add individual team accounts from the dashboard.</p>
+          <form class="auth-form" data-auth-form data-endpoint="/api/auth/setup">
+            <label class="auth-field">Full name<input name="fullName" type="text" autocomplete="name" placeholder="Your name" maxlength="120" required autofocus></label>
+            <label class="auth-field">Position<input name="position" type="text" autocomplete="organization-title" placeholder="e.g. Delivery manager" maxlength="100" required></label>
+            <label class="auth-field">Company name<input name="companyName" type="text" autocomplete="organization" placeholder="Your company" maxlength="150" required></label>
+            <label class="auth-field">User ID<input name="userId" type="text" autocomplete="username" placeholder="Choose a user ID" minlength="3" maxlength="64" pattern="[A-Za-z0-9._@\-]{3,64}" required><span class="auth-field-hint">3–64 letters, numbers, dots, underscores, hyphens, or @.</span></label>
+            <label class="auth-field">Password<input name="password" type="password" autocomplete="new-password" placeholder="Create a password" minlength="8" maxlength="128" required><span class="auth-field-hint">Use at least 8 characters.</span></label>
+            <div class="auth-message" data-auth-message role="alert" hidden></div>
+            <button class="auth-submit" type="submit" data-original-label="Create administrator account">Create administrator account</button>
+          </form>
+          <div class="auth-setup-note">This first account has administrator access. Only administrators can add other user accounts.</div>
+        </section>
+      </main>
+      <footer class="auth-footer">TAF Disti Desk <span aria-hidden="true">·</span> Delivery tracker<br><span class="creator-credit">Created by Aamir Rahamn : TAF Technologies</span></footer>
+    </div>
+  </body>
+</html>
