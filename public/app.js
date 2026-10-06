@@ -6,6 +6,9 @@ const confirmUpload = document.querySelector('#confirm-upload');
 const uploadButtonLabel = document.querySelector('#upload-button-label');
 const uploadError = document.querySelector('#upload-error');
 const reconcileForm = document.querySelector('#reconcile-form');
+const damageDialog = document.querySelector('#rt-damage-dialog');
+const damageForm = document.querySelector('#rt-damage-form');
+const damagePhotoInput = document.querySelector('#rt-damage-photo');
 const exportButton = document.querySelector('#export-day');
 const toast = document.querySelector('#toast');
 
@@ -14,6 +17,7 @@ let deliveryPartners = [];
 let currentUser = null;
 let selectedFile = null;
 let activeBill = null;
+const selectedBillIds = new Set();
 let toastTimeout;
 let selectedDeliveryDate = getLocalDateValue();
 
@@ -143,6 +147,10 @@ function renderRows() {
   const emptyTitle = document.querySelector('#empty-title');
   const emptyCopy = document.querySelector('#empty-copy');
   const filtered = visibleDeliveries();
+  const visibleIds = new Set(filtered.map(bill => bill.id));
+  for (const billId of selectedBillIds) {
+    if (!visibleIds.has(billId)) selectedBillIds.delete(billId);
+  }
 
   document.querySelector('#result-count').textContent = `${filtered.length} ${filtered.length === 1 ? 'order' : 'orders'}`;
   document.querySelector('#table-footer-copy').textContent = `Showing ${filtered.length} ${filtered.length === 1 ? 'delivery' : 'deliveries'}`;
@@ -161,6 +169,10 @@ function renderRows() {
       `<span>${escapeHtml(item.item_name)} · ${Number(item.qty_ordered).toLocaleString()}</span>`
     ).join('');
     const moreItems = bill.items.length > 2 ? `<span>+${bill.items.length - 2} more item${bill.items.length > 3 ? 's' : ''}</span>` : '';
+    const returnedItems = bill.items.filter(item => Number(item.qty_returned) > 0);
+    const returnSummary = returnedItems.map(item =>
+      `<span class="return-type-summary">${Number(item.qty_returned).toLocaleString()} returned · ${escapeHtml(item.return_type || 'Type not set')}</span>`
+    ).join('');
 
     const assignmentCell = ['admin', 'manager'].includes(currentUser?.role)
       ? `<td><select class="assignment-select" data-assignment="${bill.id}" aria-label="Assign bill ${escapeHtml(bill.bill_no)}"><option value="">Unassigned</option>${deliveryPartners.map(partner => `<option value="${partner.id}" ${Number(bill.assigned_to) === partner.id ? 'selected' : ''}>${escapeHtml(partner.fullName)}</option>`).join('')}</select></td>`
@@ -168,15 +180,20 @@ function renderRows() {
     const actionCell = currentUser?.role === 'manager'
       ? '<td><span class="assignment-note">Assign a partner</span></td>'
       : `<td><button class="row-action" type="button" data-reconcile="${bill.id}" aria-label="Update delivery ${escapeHtml(bill.bill_no)}"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6.5 12.5 3.6 3.6 7.7-8.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.7"/></svg>Update</button></td>`;
+    const selectionCell = ['admin', 'manager'].includes(currentUser?.role)
+      ? `<td><input class="bill-select-checkbox" type="checkbox" data-select-bill="${bill.id}" aria-label="Select bill ${escapeHtml(bill.bill_no)}" ${selectedBillIds.has(bill.id) ? 'checked' : ''}></td>`
+      : '';
     return `<tr>
+      ${selectionCell}
       <td><div class="bill-cell"><span class="bill-number">#${escapeHtml(bill.bill_no)}</span><span class="bill-date">${escapeHtml(formatDate(bill.delivery_date || bill.created_at))}</span></div></td>
       <td><div class="outlet-cell"><span class="outlet-name" title="${escapeHtml(bill.outlet_name)}">${escapeHtml(bill.outlet_name)}</span><span class="outlet-address" title="${escapeHtml(bill.address || 'No address listed')}">${escapeHtml(bill.address || 'No address listed')}</span></div></td>
-      <td><div class="item-summary">${itemPreview}${moreItems}</div></td>
+      <td><div class="item-summary">${itemPreview}${moreItems}${returnSummary}</div></td>
       <td class="progress-cell"><div class="progress-label"><span>${quantities.delivered.toLocaleString()} / ${quantities.total.toLocaleString()} delivered</span><strong>${percentage}%</strong></div><div class="progress-track" aria-label="${percentage}% resolved, ${escapeHtml(deliveryStatus)}"><div class="progress-bar" style="width:${percentage}%"></div></div><span class="progress-pending">${escapeHtml(deliveryStatus)}</span></td>
       <td><span class="status-pill ${statusClass(bill.status)}">${escapeHtml(bill.status)}</span></td>
       ${assignmentCell}${actionCell}
     </tr>`;
   }).join('');
+  updateBulkAssignmentControls(filtered);
 
   const showEmpty = filtered.length === 0;
   emptyState.hidden = !showEmpty;
@@ -242,6 +259,8 @@ async function loadCurrentUser() {
   document.querySelector('#modal-template').hidden = user.role === 'delivery_partner';
   exportButton.hidden = user.role === 'delivery_partner';
   document.querySelector('#assigned-header').hidden = !['admin', 'manager'].includes(user.role);
+  document.querySelector('#bulk-assignment').hidden = !['admin', 'manager'].includes(user.role);
+  document.querySelector('#bulk-select-header').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#delivery-heading').textContent = user.role === 'delivery_partner' ? 'My assigned deliveries' : 'All deliveries';
   document.querySelector('#total-copy').textContent = user.role === 'delivery_partner'
     ? 'Bills assigned to you'
@@ -252,12 +271,12 @@ async function loadCurrentUser() {
     ? 'Your assigned deliveries'
     : 'Your deliveries, in one place.';
   document.querySelector('#page-heading-copy').textContent = user.role === 'manager'
-    ? 'Assign each bill to a delivery partner and monitor progress as it happens.'
+    ? 'Select multiple bills and assign them to a delivery partner together.'
     : user.role === 'delivery_partner'
       ? 'Update delivery progress for the bills assigned to you.'
       : 'Import your order sheet and keep every drop-off on track.';
   document.querySelector('#panel-subtitle').textContent = user.role === 'manager'
-    ? 'Assign deliveries to a partner and monitor their progress.'
+    ? 'Select one or more bills below to assign them to a delivery partner.'
     : user.role === 'delivery_partner'
       ? 'Only deliveries assigned to your account are shown.'
       : 'View orders and update delivery progress for the selected day.';
@@ -268,6 +287,47 @@ async function loadCurrentUser() {
 async function loadDeliveryPartners() {
   if (!['admin', 'manager'].includes(currentUser?.role)) return;
   deliveryPartners = await requestJson('/api/delivery-partners');
+  document.querySelector('#bulk-partner-select').innerHTML = '<option value="">Choose a delivery partner</option>' +
+    deliveryPartners.map(partner => `<option value="${partner.id}">${escapeHtml(partner.fullName)}</option>`).join('');
+}
+
+function updateBulkAssignmentControls(visibleBills = visibleDeliveries()) {
+  const visibleIds = visibleBills.map(bill => bill.id);
+  const selectedVisibleCount = visibleIds.filter(id => selectedBillIds.has(id)).length;
+  document.querySelector('#bulk-selection-count').textContent =
+    `${selectedBillIds.size} ${selectedBillIds.size === 1 ? 'bill' : 'bills'} selected`;
+  const selectVisible = document.querySelector('#select-visible-bills');
+  selectVisible.checked = visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
+  selectVisible.indeterminate = selectedVisibleCount > 0 && selectedVisibleCount < visibleIds.length;
+  document.querySelector('#assign-selected-bills').disabled =
+    selectedBillIds.size === 0 || !document.querySelector('#bulk-partner-select').value;
+}
+
+async function assignSelectedBills() {
+  const billIds = [...selectedBillIds];
+  const partnerId = document.querySelector('#bulk-partner-select').value;
+  if (!billIds.length || !partnerId) return;
+
+  const button = document.querySelector('#assign-selected-bills');
+  button.disabled = true;
+  button.textContent = 'Assigning...';
+  try {
+    const result = await requestJson('/api/bills/assignments', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ billIds, partnerId })
+    });
+    selectedBillIds.clear();
+    document.querySelector('#select-visible-bills').checked = false;
+    document.querySelector('#bulk-partner-select').value = '';
+    await loadDeliveries();
+    showToast(result.message);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    button.textContent = 'Assign bills';
+    updateBulkAssignmentControls();
+  }
 }
 
 async function saveAssignment(select) {
@@ -432,6 +492,7 @@ function openReconcileDialog(bill) {
       <span class="reconcile-ordered">${Number(item.qty_ordered)}</span>
       <label><span class="visually-hidden">Delivered quantity for ${escapeHtml(item.item_name)}</span><input class="quantity-input" type="number" min="0" max="${Number(item.qty_ordered)}" step="1" name="delivered-${item.id}" value="${Number(item.qty_delivered)}" required></label>
       <label><span class="visually-hidden">Returned quantity for ${escapeHtml(item.item_name)}</span><input class="quantity-input" type="number" min="0" max="${Number(item.qty_ordered)}" step="1" name="returned-${item.id}" value="${Number(item.qty_returned)}" required></label>
+      <label><span class="visually-hidden">Return type for ${escapeHtml(item.item_name)}</span><select class="return-type-select" name="return-type-${item.id}" aria-label="Return type for ${escapeHtml(item.item_name)}" ${Number(item.qty_returned) ? 'required' : 'disabled'}><option value="">Choose</option><option value="R" ${item.return_type === 'R' ? 'selected' : ''}>R</option><option value="DA" ${item.return_type === 'DA' ? 'selected' : ''}>DA</option><option value="DUE" ${item.return_type === 'DUE' ? 'selected' : ''}>DUE</option></select></label>
       <button class="item-delivered-action" type="button" data-fully-delivered="${item.id}" aria-label="Mark ${escapeHtml(item.item_name)} fully delivered" title="Set delivered quantity to the ordered quantity and clear any returns">Mark fully delivered</button>
     </div>
   `).join('');
@@ -448,6 +509,9 @@ function updateDeliveryShortcutStates() {
     const row = document.querySelector(`[data-item-row="${item.id}"]`);
     const delivered = Number(reconcileForm.elements.namedItem(`delivered-${item.id}`).value);
     const returned = Number(reconcileForm.elements.namedItem(`returned-${item.id}`).value);
+    const returnType = reconcileForm.elements.namedItem(`return-type-${item.id}`);
+    returnType.disabled = returned === 0;
+    if (returned === 0) returnType.value = '';
     const fullyDelivered = delivered === Number(item.qty_ordered) && returned === 0;
     const itemButton = row.querySelector('[data-fully-delivered]');
     itemButton.classList.toggle('is-fully-delivered', fullyDelivered);
@@ -470,6 +534,7 @@ function fillItemAsFullyDelivered(itemId) {
   const returnedInput = reconcileForm.elements.namedItem(`returned-${item.id}`);
   deliveredInput.value = String(Number(item.qty_ordered));
   returnedInput.value = '0';
+  reconcileForm.elements.namedItem(`return-type-${item.id}`).value = '';
   document.querySelector('#reconcile-error').hidden = true;
   updateDeliveryShortcutStates();
 }
@@ -489,19 +554,22 @@ async function saveReconciliation(event) {
   const items = activeBill.items.map(item => ({
     id: item.id,
     qty_delivered: Number(formData.get(`delivered-${item.id}`)),
-    qty_returned: Number(formData.get(`returned-${item.id}`))
+    qty_returned: Number(formData.get(`returned-${item.id}`)),
+    return_type: String(formData.get(`return-type-${item.id}`) || '')
   }));
   const invalid = items.some((item, index) =>
     !Number.isSafeInteger(item.qty_delivered) ||
     !Number.isSafeInteger(item.qty_returned) ||
     item.qty_delivered < 0 ||
     item.qty_returned < 0 ||
-    item.qty_delivered + item.qty_returned > Number(activeBill.items[index].qty_ordered)
+    item.qty_delivered + item.qty_returned > Number(activeBill.items[index].qty_ordered) ||
+    (item.qty_returned > 0 && !['R', 'DA', 'DUE'].includes(item.return_type)) ||
+    (item.qty_returned === 0 && item.return_type !== '')
   );
 
   if (invalid) {
     const errorElement = document.querySelector('#reconcile-error');
-    errorElement.textContent = 'Delivered and returned quantities cannot exceed the quantity ordered.';
+    errorElement.textContent = 'Delivered and returned quantities cannot exceed the quantity ordered. Choose R, DA, or DUE for returned stock.';
     errorElement.hidden = false;
     return;
   }
@@ -530,6 +598,102 @@ async function saveReconciliation(event) {
   }
 }
 
+async function loadDamageReports() {
+  const reportList = document.querySelector('#damage-report-list');
+  const dateField = document.querySelector('#rt-damage-date');
+  if (dateField) dateField.value = selectedDeliveryDate;
+  document.querySelector('#damage-history-date').textContent = `· ${formatDate(selectedDeliveryDate)}`;
+  try {
+    const reports = await requestJson(`/api/rt-damage?date=${encodeURIComponent(selectedDeliveryDate)}`);
+    if (!reports.length) {
+      reportList.innerHTML = `<p class="damage-history-empty">No RT damage reports for ${escapeHtml(formatDate(selectedDeliveryDate))}.</p>`;
+      return;
+    }
+    reportList.innerHTML = reports.map(report => `
+      <a class="damage-report" href="/api/rt-damage/${Number(report.id)}/photo" target="_blank" rel="noopener">
+        <img src="/api/rt-damage/${Number(report.id)}/photo" alt="Damaged stock for RT ${escapeHtml(report.rtNumber)}" loading="lazy">
+        <span class="damage-report-details">
+          <strong>RT ${escapeHtml(report.rtNumber)}</strong>
+          <span>${escapeHtml(report.submittedBy)} · ${escapeHtml(formatDate(report.createdAt))}</span>
+        </span>
+        <span class="damage-report-open" aria-hidden="true">↗</span>
+      </a>
+    `).join('');
+  } catch (error) {
+    reportList.innerHTML = `<p class="damage-history-empty error">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function openDamageDialog() {
+  document.querySelector('#rt-damage-error').hidden = true;
+  document.querySelector('#rt-damage-error').textContent = '';
+  document.querySelector('#rt-damage-date').value = selectedDeliveryDate;
+  damageDialog.showModal();
+  loadDamageReports();
+}
+
+function clearDamagePhoto() {
+  const preview = document.querySelector('#damage-photo-preview');
+  if (preview.src.startsWith('blob:')) URL.revokeObjectURL(preview.src);
+  preview.removeAttribute('src');
+  document.querySelector('#damage-photo-name').textContent = '';
+  document.querySelector('#damage-photo-preview-wrap').hidden = true;
+  damagePhotoInput.value = '';
+}
+
+function previewDamagePhoto(file) {
+  const error = document.querySelector('#rt-damage-error');
+  error.hidden = true;
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) {
+    clearDamagePhoto();
+    error.textContent = 'This photo is larger than 8 MB. Please choose a smaller photo.';
+    error.hidden = false;
+    return;
+  }
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+    clearDamagePhoto();
+    error.textContent = 'Choose a JPEG, PNG, or WebP photo.';
+    error.hidden = false;
+    return;
+  }
+
+  const preview = document.querySelector('#damage-photo-preview');
+  if (preview.src.startsWith('blob:')) URL.revokeObjectURL(preview.src);
+  preview.src = URL.createObjectURL(file);
+  document.querySelector('#damage-photo-name').textContent = file.name;
+  document.querySelector('#damage-photo-preview-wrap').hidden = false;
+}
+
+async function saveDamageReport(event) {
+  event.preventDefault();
+  const error = document.querySelector('#rt-damage-error');
+  if (!damageForm.reportValidity()) return;
+
+  const button = document.querySelector('#save-rt-damage');
+  button.disabled = true;
+  button.textContent = 'Saving...';
+  error.hidden = true;
+  try {
+    const result = await requestJson('/api/rt-damage', {
+      method: 'POST',
+      body: new FormData(damageForm)
+    });
+    const rtNumber = document.querySelector('#rt-number-input').value.trim();
+    damageForm.reset();
+    clearDamagePhoto();
+    await loadDamageReports();
+    showToast(result.message || `Damage report saved for RT ${rtNumber}.`);
+  } catch (requestError) {
+    error.textContent = requestError.message;
+    error.hidden = false;
+    showToast(requestError.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Save report';
+  }
+}
+
 function downloadTemplate() {
   const csv = [
     'Bill No,Outlet Name,Address,Item Name,Quantity',
@@ -549,6 +713,16 @@ function downloadTemplate() {
 
 document.querySelector('#open-upload').addEventListener('click', openUploadDialog);
 document.querySelector('#empty-upload').addEventListener('click', openUploadDialog);
+document.querySelector('#open-rt-damage').addEventListener('click', openDamageDialog);
+document.querySelector('#cancel-rt-damage').addEventListener('click', () => damageDialog.close());
+document.querySelector('#refresh-damage-reports').addEventListener('click', loadDamageReports);
+document.querySelector('#remove-damage-photo').addEventListener('click', clearDamagePhoto);
+damagePhotoInput.addEventListener('change', () => previewDamagePhoto(damagePhotoInput.files[0]));
+damageForm.addEventListener('submit', saveDamageReport);
+damageDialog.addEventListener('close', () => {
+  damageForm.reset();
+  clearDamagePhoto();
+});
 document.querySelectorAll('[data-logout]').forEach(button => button.addEventListener('click', signOut));
 document.querySelector('#cancel-upload').addEventListener('click', () => uploadDialog.close());
 document.querySelector('#confirm-upload').addEventListener('click', uploadFile);
@@ -565,7 +739,23 @@ document.querySelector('#delivery-rows').addEventListener('click', event => {
 document.querySelector('#delivery-rows').addEventListener('change', event => {
   const select = event.target.closest('[data-assignment]');
   if (select) saveAssignment(select);
+  const checkbox = event.target.closest('[data-select-bill]');
+  if (checkbox) {
+    const billId = Number(checkbox.dataset.selectBill);
+    if (checkbox.checked) selectedBillIds.add(billId);
+    else selectedBillIds.delete(billId);
+    updateBulkAssignmentControls();
+  }
 });
+document.querySelector('#select-visible-bills').addEventListener('change', event => {
+  for (const bill of visibleDeliveries()) {
+    if (event.currentTarget.checked) selectedBillIds.add(bill.id);
+    else selectedBillIds.delete(bill.id);
+  }
+  renderRows();
+});
+document.querySelector('#bulk-partner-select').addEventListener('change', () => updateBulkAssignmentControls());
+document.querySelector('#assign-selected-bills').addEventListener('click', assignSelectedBills);
 document.querySelector('#cancel-reconcile').addEventListener('click', () => reconcileDialog.close());
 document.querySelector('#fill-bill-delivered').addEventListener('click', fillBillAsFullyDelivered);
 document.querySelector('#reconcile-items').addEventListener('click', event => {
@@ -573,6 +763,7 @@ document.querySelector('#reconcile-items').addEventListener('click', event => {
   if (button) fillItemAsFullyDelivered(button.dataset.fullyDelivered);
 });
 reconcileForm.addEventListener('input', updateDeliveryShortcutStates);
+reconcileForm.addEventListener('change', updateDeliveryShortcutStates);
 reconcileForm.addEventListener('submit', saveReconciliation);
 dropzone.addEventListener('click', () => fileInput.click());
 dropzone.addEventListener('keydown', event => {
@@ -610,6 +801,7 @@ document.querySelector('#dashboard-date').addEventListener('change', event => {
   localStorage.setItem('tafDistiDesk.selectedDeliveryDate', selectedDeliveryDate);
   document.querySelector('#status-filter').value = 'All';
   renderRows();
+  if (damageDialog.open) loadDamageReports();
 });
 exportButton.addEventListener('click', exportSelectedDay);
 async function initializeDashboard() {

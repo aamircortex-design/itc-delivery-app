@@ -37,6 +37,10 @@
             Deliveries
             <span class="nav-count" id="nav-count">0</span>
           </a>
+          <button class="nav-link damage-nav-link" id="open-rt-damage" type="button">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7.5h3l1.4-2h7.2l1.4 2h3A1.5 1.5 0 0 1 21.5 9v9a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 18V9A1.5 1.5 0 0 1 4 7.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.2" stroke="currentColor" stroke-width="1.6"/><path d="M18 10h.01" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+            RT Damage
+          </button>
           <a class="nav-link" id="user-management-link" href="/users" hidden>
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="9" cy="8" r="3" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 19c.5-3 2.4-4.5 5.5-4.5s5 1.5 5.5 4.5M16 7.5a2.8 2.8 0 0 1 0 5.5M17 15c2.1.5 3.3 1.8 3.6 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
             Manage users
@@ -144,9 +148,18 @@
                 </label>
               </div>
             </div>
+            <div class="bulk-assignment" id="bulk-assignment" hidden>
+              <label class="bulk-select-all"><input id="select-visible-bills" type="checkbox"><span>Select visible bills</span></label>
+              <span class="bulk-selection-count" id="bulk-selection-count">0 selected</span>
+              <label class="bulk-partner-label" for="bulk-partner-select">Assign selected to</label>
+              <select id="bulk-partner-select" class="assignment-select" aria-label="Delivery partner for selected bills">
+                <option value="">Choose a delivery partner</option>
+              </select>
+              <button class="button button-primary" id="assign-selected-bills" type="button" disabled>Assign bills</button>
+            </div>
             <div class="table-scroll">
               <table>
-                <thead><tr><th>DELIVERY</th><th>OUTLET &amp; DELIVERY AREA</th><th>ITEMS</th><th>PROGRESS</th><th>STATUS</th><th id="assigned-header" hidden>DELIVERY PARTNER</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
+                <thead><tr><th id="bulk-select-header" hidden><span class="visually-hidden">Select bill</span></th><th>DELIVERY</th><th>OUTLET &amp; DELIVERY AREA</th><th>ITEMS</th><th>PROGRESS</th><th>STATUS</th><th id="assigned-header" hidden>DELIVERY PARTNER</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
                 <tbody id="delivery-rows"></tbody>
               </table>
               <div class="empty-state" id="empty-state" hidden>
@@ -206,7 +219,7 @@
           </div>
           <button class="button button-secondary" id="fill-bill-delivered" type="button">Mark bill fully delivered</button>
         </div>
-        <div class="reconcile-list-heading"><span>ITEM</span><span>ORDERED</span><span>DELIVERED</span><span>RETURNED</span></div>
+        <div class="reconcile-list-heading"><span>ITEM</span><span>ORDERED</span><span>DELIVERED</span><span>RETURNED</span><span>RETURN TYPE</span><span></span></div>
         <div id="reconcile-items" class="reconcile-items"></div>
         <div class="dialog-error" id="reconcile-error" role="alert" hidden></div>
         <div class="modal-actions">
@@ -214,6 +227,42 @@
           <button class="button button-primary" id="save-reconcile" type="submit">Save progress</button>
         </div>
       </form>
+    </dialog>
+    <dialog class="modal damage-modal" id="rt-damage-dialog" aria-labelledby="rt-damage-title">
+      <form method="dialog" class="dialog-close-form"><button class="dialog-close" aria-label="Close RT damage" value="cancel" type="submit">×</button></form>
+      <div class="modal-icon damage-modal-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7.5h3l1.4-2h7.2l1.4 2h3A1.5 1.5 0 0 1 21.5 9v9a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 18V9A1.5 1.5 0 0 1 4 7.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.2" stroke="currentColor" stroke-width="1.6"/></svg></div>
+      <h2 id="rt-damage-title">Report RT damage</h2>
+      <p class="modal-description">Enter the RT number and attach a photo of the damaged stock received from the outlet.</p>
+      <form id="rt-damage-form">
+        <label class="date-field" for="rt-number-input">
+          <span>RT number</span>
+          <input id="rt-number-input" name="rtNumber" type="text" maxlength="64" placeholder="Enter RT number" required>
+        </label>
+        <label class="damage-photo-picker" for="rt-damage-photo">
+          <span class="damage-photo-icon" aria-hidden="true">+</span>
+          <strong>Take or choose a photo</strong>
+          <span>Allow camera access when your phone asks. Photos up to 8 MB (JPEG, PNG, or WebP).</span>
+        </label>
+        <input class="visually-hidden" id="rt-damage-photo" name="photo" type="file" accept="image/*" capture="environment" required>
+        <div class="damage-photo-preview-wrap" id="damage-photo-preview-wrap" hidden>
+          <img id="damage-photo-preview" alt="Preview of damaged stock photo">
+          <span id="damage-photo-name"></span>
+          <button class="text-link" id="remove-damage-photo" type="button">Remove photo</button>
+        </div>
+        <div class="dialog-error" id="rt-damage-error" role="alert" hidden></div>
+        <div class="modal-actions">
+          <button class="button button-secondary" id="cancel-rt-damage" type="button">Cancel</button>
+          <button class="button button-primary" id="save-rt-damage" type="submit">Save report</button>
+        </div>
+      </form>
+      <label class="date-field damage-date-field" for="rt-damage-date">
+        <span>Report date (dashboard date)</span>
+        <input id="rt-damage-date" name="damageDate" type="date" required readonly>
+      </label>
+      <section class="damage-report-history" aria-labelledby="damage-history-title">
+        <div class="damage-history-heading"><h3 id="damage-history-title">RT Damage reports <span id="damage-history-date"></span></h3><button class="text-link" id="refresh-damage-reports" type="button">Refresh</button></div>
+        <div id="damage-report-list" class="damage-report-list"><p class="damage-history-empty">Loading reports...</p></div>
+      </section>
     </dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </body>

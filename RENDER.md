@@ -30,11 +30,29 @@ has been checked.
 ## Company workspaces
 
 - Each company can create its own workspace from the sign-in page. The person who
-  creates it becomes its first administrator; that administrator adds the company's
-  other users from **Manage users**.
+  creates it enters the workspace name, their email address, and becomes its first
+  administrator; that administrator adds the company's other users from **Manage users**.
 - Users in a workspace share that company's delivery records. The server scopes
   delivery, assignment, export, and user-management operations to the signed-in user's
-  workspace. User IDs must be unique across the app.
+  workspace. Team accounts are assigned to the administrator's current workspace, rather
+  than choosing a workspace themselves. User IDs and registered email addresses must be
+  unique across the app.
 - On an existing database, startup migration keeps the existing users and delivery
-  records together in their current company workspace. Back up the persistent database
-  before deploying schema changes.
+  records together in their current company workspace. Existing accounts need an email
+  address added to their records before password recovery is available for them. Back
+  up the persistent database before deploying schema changes.
+
+## Password recovery email
+
+Password recovery sends a single-use link that expires after 30 minutes; the app never
+sends or reveals an existing password. Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
+and `SMTP_PASS` in the hosting environment; `EMAIL_FROM` is optional and defaults to
+`SMTP_USER`. Set `APP_BASE_URL` to the
+public HTTPS app URL so reset links point to the deployed service. SMTP port 465 uses
+implicit TLS; other ports use the normal SMTP connection with Nodemailer authentication.
+
+## RT damage reports
+
+Delivery agents can submit an RT number and damaged-stock photo from the dashboard.
+Reports are permanent and cannot be deleted through the app. They are shown to the
+whole workspace, including managers, filtered by the dashboard's selected date.

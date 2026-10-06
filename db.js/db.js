@@ -36,6 +36,7 @@ async function initDb() {
       qty_ordered INTEGER NOT NULL CHECK (qty_ordered >= 0),
       qty_delivered INTEGER NOT NULL DEFAULT 0 CHECK (qty_delivered >= 0),
       qty_returned INTEGER NOT NULL DEFAULT 0 CHECK (qty_returned >= 0),
+      return_type TEXT NOT NULL DEFAULT '' CHECK (return_type IN ('', 'R', 'DA', 'DUE')),
       UNIQUE (bill_id, item_name)
     );
 
@@ -59,15 +60,82 @@ async function initDb() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      token_hash TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS rt_damage_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      rt_number TEXT NOT NULL,
+      damage_date TEXT NOT NULL,
+      photo_mime_type TEXT NOT NULL CHECK (photo_mime_type IN ('image/jpeg', 'image/png', 'image/webp')),
+      photo_data BLOB NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE INDEX IF NOT EXISTS auth_sessions_expiry ON auth_sessions(expires_at);
+    CREATE INDEX IF NOT EXISTS password_reset_tokens_expiry ON password_reset_tokens(expires_at);
   `);
+
+  const damageColumns = await db.all('PRAGMA table_info(rt_damage_reports)');
+  if (!damageColumns.some(column => column.name === 'damage_date')) {
+    await db.exec("ALTER TABLE rt_damage_reports ADD COLUMN damage_date TEXT NOT NULL DEFAULT ''");
+    await db.exec("UPDATE rt_damage_reports SET damage_date = substr(created_at, 1, 10) WHERE damage_date = ''");
+  }
+  const damageUserColumn = damageColumns.find(column => column.name === 'user_id');
+  const damageForeignKeys = await db.all('PRAGMA foreign_key_list(rt_damage_reports)');
+  if (
+    damageUserColumn?.notnull ||
+    damageForeignKeys.some(key => key.from === 'user_id' && key.on_delete.toUpperCase() !== 'SET NULL')
+  ) {
+    await db.exec('PRAGMA foreign_keys = OFF');
+    await db.exec('BEGIN IMMEDIATE');
+    try {
+      await db.exec(`
+        CREATE TABLE rt_damage_reports_updated (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+          user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          rt_number TEXT NOT NULL,
+          damage_date TEXT NOT NULL,
+          photo_mime_type TEXT NOT NULL CHECK (photo_mime_type IN ('image/jpeg', 'image/png', 'image/webp')),
+          photo_data BLOB NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO rt_damage_reports_updated
+          (id, company_id, user_id, rt_number, damage_date, photo_mime_type, photo_data, created_at)
+        SELECT id, company_id, user_id, rt_number, damage_date, photo_mime_type, photo_data, created_at
+        FROM rt_damage_reports;
+        DROP TABLE rt_damage_reports;
+        ALTER TABLE rt_damage_reports_updated RENAME TO rt_damage_reports;
+      `);
+      await db.exec('COMMIT');
+    } catch (error) {
+      await db.exec('ROLLBACK');
+      throw error;
+    } finally {
+      await db.exec('PRAGMA foreign_keys = ON');
+    }
+  }
 
   const userColumns = await db.all('PRAGMA table_info(users)');
   if (!userColumns.some(column => column.name === 'company_id')) {
     await db.exec('ALTER TABLE users ADD COLUMN company_id INTEGER REFERENCES companies(id)');
   }
+  if (!userColumns.some(column => column.name === 'email')) {
+    await db.exec('ALTER TABLE users ADD COLUMN email TEXT');
+  }
 
   const billColumns = await db.all('PRAGMA table_info(bills)');
+  const billItemColumns = await db.all('PRAGMA table_info(bill_items)');
+  if (!billItemColumns.some(column => column.name === 'return_type')) {
+    await db.exec("ALTER TABLE bill_items ADD COLUMN return_type TEXT NOT NULL DEFAULT ''");
+  }
   if (!billColumns.some(column => column.name === 'delivery_date')) {
     await db.exec("ALTER TABLE bills ADD COLUMN delivery_date TEXT NOT NULL DEFAULT ''");
   }
@@ -173,8 +241,10 @@ async function initDb() {
 
   await db.run('DELETE FROM auth_sessions WHERE expires_at <= ?', [new Date().toISOString()]);
   await db.exec('CREATE INDEX IF NOT EXISTS users_company_id ON users(company_id)');
+  await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users(email COLLATE NOCASE) WHERE email IS NOT NULL');
   await db.exec('CREATE INDEX IF NOT EXISTS bills_company_id ON bills(company_id)');
   await db.exec('CREATE INDEX IF NOT EXISTS bills_assigned_to ON bills(assigned_to)');
+  await db.exec('CREATE INDEX IF NOT EXISTS rt_damage_reports_company_date ON rt_damage_reports(company_id, damage_date, created_at DESC)');
 
   return db;
 }

@@ -35,7 +35,8 @@
           <form class="auth-form" data-auth-form data-endpoint="/api/auth/setup">
             <label class="auth-field">Full name<input name="fullName" type="text" autocomplete="name" placeholder="Your name" maxlength="120" required autofocus></label>
             <label class="auth-field">Position<input name="position" type="text" autocomplete="organization-title" placeholder="e.g. Delivery manager" maxlength="100" required></label>
-            <label class="auth-field">Company name<input name="companyName" type="text" autocomplete="organization" placeholder="Your company" maxlength="150" required></label>
+            <label class="auth-field">Workspace name<input name="companyName" type="text" autocomplete="organization" placeholder="Your company workspace" maxlength="150" required></label>
+            <label class="auth-field">Email address<input name="email" type="email" autocomplete="email" placeholder="you@company.com" maxlength="254" required></label>
             <label class="auth-field">User ID<input name="userId" type="text" autocomplete="username" placeholder="Choose a user ID" minlength="3" maxlength="64" pattern="[A-Za-z0-9._@\-]{3,64}" required><span class="auth-field-hint">3–64 letters, numbers, dots, underscores, hyphens, or @.</span></label>
             <label class="auth-field">Password<input name="password" type="password" autocomplete="new-password" placeholder="Create a password" minlength="8" maxlength="128" required><span class="auth-field-hint">Use at least 8 characters.</span></label>
             <div class="auth-message" data-auth-message role="alert" hidden></div>

@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { promisify } = require('util');
 const { Readable } = require('stream');
+const nodemailer = require('nodemailer');
 const { parse } = require('csv-parse/sync');
 const { strToU8, zipSync } = require('fflate');
 const readXlsxFile = require('read-excel-file/node');
@@ -21,6 +22,10 @@ const publicPaths = new Set([
   '/setup.html',
   '/company-setup.html',
   '/company-setup',
+  '/forgot-password.html',
+  '/forgot-password',
+  '/reset-password.html',
+  '/reset-password',
   '/auth.css',
   '/auth.js',
   '/styles.css',
@@ -31,6 +36,8 @@ const publicPaths = new Set([
   '/icons/taf-disti-desk.svg',
   '/health',
   '/api/auth/login',
+  '/api/auth/forgot-password',
+  '/api/auth/reset-password',
   '/api/auth/setup',
   '/api/auth/company-setup'
 ]);
@@ -42,6 +49,16 @@ const upload = multer({
       return callback(null, true);
     }
     callback(new Error('Choose an Excel (.xlsx) or CSV file.'));
+  }
+});
+const damagePhotoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, callback) => {
+    if (['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) {
+      return callback(null, true);
+    }
+    callback(new Error('Choose a JPEG, PNG, or WebP photo.'));
   }
 });
 
@@ -66,6 +83,26 @@ function getCookieValue(req, name) {
 
 function getSessionTokenHash(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function getSupportedImageType(buffer) {
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (
+    buffer.length >= 8 &&
+    buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  ) {
+    return 'image/png';
+  }
+  if (
+    buffer.length >= 12 &&
+    buffer.toString('ascii', 0, 4) === 'RIFF' &&
+    buffer.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+  return null;
 }
 
 function setSessionCookie(res, token) {
@@ -114,6 +151,7 @@ function validateUserDetails(details = {}) {
     fullName: String(details.fullName || '').trim(),
     position: String(details.position || '').trim(),
     companyName: String(details.companyName || '').trim(),
+    email: String(details.email || '').trim().toLowerCase(),
     userId: String(details.userId || '').trim(),
     password: String(details.password || ''),
     role: String(details.role || 'manager')
@@ -127,6 +165,9 @@ function validateUserDetails(details = {}) {
   }
   if (!user.companyName || user.companyName.length > 150) {
     throw new Error('Enter a company name of 1 to 150 characters.');
+  }
+  if (user.email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user.email)) {
+    throw new Error('Enter a valid email address (up to 254 characters).');
   }
   if (!/^[A-Za-z0-9._@-]{3,64}$/.test(user.userId)) {
     throw new Error('User ID must be 3 to 64 characters using letters, numbers, dots, underscores, hyphens, or @.');
@@ -215,6 +256,115 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const email = String(req.body.email || '').trim().toLowerCase();
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: 'Enter a valid email address.' });
+  }
+
+  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS } = process.env;
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
+    return res.status(503).json({ error: 'Password reset email is not configured. Please contact your administrator.' });
+  }
+
+  const port = SMTP_PORT ? Number(SMTP_PORT) : 587;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return res.status(503).json({ error: 'Password reset email is not configured. Please contact your administrator.' });
+  }
+
+  let baseUrl;
+  try {
+    const configuredBaseUrl = process.env.APP_BASE_URL ||
+      (process.env.NODE_ENV === 'production' ? '' : `${req.protocol}://${req.get('host')}`);
+    const parsedBaseUrl = new URL(configuredBaseUrl);
+    if (process.env.NODE_ENV === 'production' && parsedBaseUrl.protocol !== 'https:') {
+      throw new Error('Production password reset links must use HTTPS.');
+    }
+    baseUrl = parsedBaseUrl.origin;
+  } catch (error) {
+    console.error('Password reset requires a valid public APP_BASE_URL:', error);
+    return res.status(503).json({ error: 'Password reset email is not configured. Please contact your administrator.' });
+  }
+
+  const db = req.app.locals.db;
+  let user;
+  let tokenHash;
+  try {
+    user = await db.get('SELECT id FROM users WHERE email = ? COLLATE NOCASE', [email]);
+    if (user) {
+      const token = crypto.randomBytes(32).toString('base64url');
+      tokenHash = getSessionTokenHash(token);
+      await db.run('DELETE FROM password_reset_tokens WHERE user_id = ?', [user.id]);
+      await db.run(
+        'INSERT INTO password_reset_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)',
+        [tokenHash, user.id, new Date(Date.now() + 30 * 60 * 1000).toISOString()]
+      );
+
+      const transporter = nodemailer.createTransport({
+        host: SMTP_HOST,
+        port,
+        secure: port === 465,
+        auth: { user: SMTP_USER, pass: SMTP_PASS }
+      });
+      const resetUrl = new URL('/reset-password.html', baseUrl);
+      resetUrl.searchParams.set('token', token);
+      await transporter.sendMail({
+        from: process.env.EMAIL_FROM || SMTP_USER,
+        to: email,
+        subject: 'Reset your TAF Disti Desk password',
+        text: `Use this link within 30 minutes to choose a new password:\n\n${resetUrl.toString()}\n\nIf you did not request this, you can ignore this email.`
+      });
+    }
+
+    res.json({ message: 'If an account uses that email address, a password reset link has been sent.' });
+  } catch (error) {
+    if (user && tokenHash) {
+      await db.run('DELETE FROM password_reset_tokens WHERE token_hash = ?', [tokenHash]);
+    }
+    console.error('Could not send password reset email:', error);
+    res.status(502).json({ error: 'Could not send the password reset email. Please try again later.' });
+  }
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  const token = String(req.body.token || '');
+  const password = String(req.body.password || '');
+  if (!token || token.length > 128 || password.length < 8 || password.length > 128) {
+    return res.status(400).json({ error: 'Use a valid reset link and a password between 8 and 128 characters.' });
+  }
+
+  const db = req.app.locals.db;
+  let transactionOpen = false;
+  try {
+    await db.exec('BEGIN IMMEDIATE');
+    transactionOpen = true;
+    const reset = await db.get(
+      'SELECT user_id AS userId FROM password_reset_tokens WHERE token_hash = ? AND expires_at > ?',
+      [getSessionTokenHash(token), new Date().toISOString()]
+    );
+    if (!reset) {
+      await db.exec('ROLLBACK');
+      transactionOpen = false;
+      return res.status(400).json({ error: 'This password reset link is invalid or has expired. Request a new one.' });
+    }
+
+    const hashedPassword = await hashPassword(password);
+    await db.run(
+      'UPDATE users SET password_salt = ?, password_hash = ? WHERE id = ?',
+      [hashedPassword.salt, hashedPassword.hash, reset.userId]
+    );
+    await db.run('DELETE FROM password_reset_tokens WHERE user_id = ?', [reset.userId]);
+    await db.run('DELETE FROM auth_sessions WHERE user_id = ?', [reset.userId]);
+    await db.exec('COMMIT');
+    transactionOpen = false;
+    res.json({ message: 'Password updated. You can now sign in with your new password.' });
+  } catch (error) {
+    if (transactionOpen) await db.exec('ROLLBACK');
+    console.error('Could not reset password:', error);
+    res.status(500).json({ error: 'Could not reset your password. Please try again.' });
+  }
+});
+
 app.post('/api/auth/setup', async (req, res) => {
   let transactionOpen = false;
   try {
@@ -243,9 +393,9 @@ app.post('/api/auth/setup', async (req, res) => {
       companyId = company.lastID;
     }
     const result = await req.app.locals.db.run(
-      `INSERT INTO users (full_name, position, company_id, company_name, user_id, password_salt, password_hash, role)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'admin')`,
-      [user.fullName, user.position, companyId, user.companyName, user.userId, password.salt, password.hash]
+      `INSERT INTO users (full_name, position, company_id, company_name, email, user_id, password_salt, password_hash, role)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'admin')`,
+      [user.fullName, user.position, companyId, user.companyName, user.email, user.userId, password.salt, password.hash]
     );
     const token = await issueSession(req.app.locals.db, result.lastID);
     await req.app.locals.db.exec('COMMIT');
@@ -255,9 +405,12 @@ app.post('/api/auth/setup', async (req, res) => {
   } catch (error) {
     if (transactionOpen) await req.app.locals.db.exec('ROLLBACK');
     if (error.message.startsWith('SQLITE_CONSTRAINT')) {
-      return res.status(409).json({ error: 'That user ID is already in use.' });
+      const message = error.message.includes('users.email')
+        ? 'That email address is already in use.'
+        : 'That user ID is already in use.';
+      return res.status(409).json({ error: message });
     }
-    if (/Enter |User ID|Password|role/i.test(error.message)) {
+    if (/Enter |User ID|Password|role|email/i.test(error.message)) {
       return res.status(400).json({ error: error.message });
     }
     console.error('Could not complete initial setup:', error);
@@ -278,9 +431,9 @@ app.post('/api/auth/company-setup', async (req, res) => {
       [user.companyName]
     );
     const result = await db.run(
-      `INSERT INTO users (full_name, position, company_id, company_name, user_id, password_salt, password_hash, role)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'admin')`,
-      [user.fullName, user.position, company.lastID, user.companyName, user.userId, password.salt, password.hash]
+      `INSERT INTO users (full_name, position, company_id, company_name, email, user_id, password_salt, password_hash, role)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'admin')`,
+      [user.fullName, user.position, company.lastID, user.companyName, user.email, user.userId, password.salt, password.hash]
     );
     const token = await issueSession(db, result.lastID);
     await db.exec('COMMIT');
@@ -290,9 +443,12 @@ app.post('/api/auth/company-setup', async (req, res) => {
   } catch (error) {
     if (transactionOpen) await req.app.locals.db.exec('ROLLBACK');
     if (error.message.startsWith('SQLITE_CONSTRAINT')) {
-      return res.status(409).json({ error: 'That user ID is already in use. Choose another one.' });
+      const message = error.message.includes('users.email')
+        ? 'That email address is already in use. Choose another one.'
+        : 'That user ID is already in use. Choose another one.';
+      return res.status(409).json({ error: message });
     }
-    if (/Enter |User ID|Password|role/i.test(error.message)) {
+    if (/Enter |User ID|Password|role|email/i.test(error.message)) {
       return res.status(400).json({ error: error.message });
     }
     console.error('Could not create company workspace:', error);
@@ -306,6 +462,14 @@ app.get('/login', async (req, res) => {
   if (req.user) return res.redirect(303, '/');
   const user = await req.app.locals.db.get('SELECT id FROM users LIMIT 1');
   res.redirect(303, user ? '/login.html' : '/setup');
+});
+
+app.get('/forgot-password', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'forgot-password.html'));
+});
+
+app.get('/reset-password', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'reset-password.html'));
 });
 
 app.get('/setup', async (req, res) => {
@@ -345,7 +509,7 @@ app.get('/api/auth/session', (req, res) => {
 app.get('/api/users', async (req, res) => {
   try {
     const users = await req.app.locals.db.all(
-      `SELECT users.id, users.full_name AS fullName, users.position, companies.name AS companyName,
+      `SELECT users.id, users.full_name AS fullName, users.position, users.email, companies.name AS companyName,
               users.user_id AS userId, users.role, users.created_at AS createdAt
        FROM users JOIN companies ON companies.id = users.company_id
        WHERE users.company_id = ? ORDER BY full_name COLLATE NOCASE`,
@@ -358,21 +522,103 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
+app.get('/api/rt-damage', async (req, res) => {
+  const damageDate = normalizeDeliveryDate(req.query.date);
+  if (!damageDate) {
+    return res.status(400).json({ error: 'Choose a valid date to view RT damage reports.' });
+  }
+  try {
+    const reports = await req.app.locals.db.all(
+      `SELECT rt_damage_reports.id, rt_damage_reports.rt_number AS rtNumber,
+              rt_damage_reports.damage_date AS damageDate,
+              rt_damage_reports.created_at AS createdAt,
+              COALESCE(users.full_name, 'Former team member') AS submittedBy
+       FROM rt_damage_reports
+       LEFT JOIN users ON users.id = rt_damage_reports.user_id
+       WHERE rt_damage_reports.company_id = ? AND rt_damage_reports.damage_date = ?
+       ORDER BY rt_damage_reports.created_at DESC, rt_damage_reports.id DESC`,
+      [req.user.companyId, damageDate]
+    );
+    res.json(reports);
+  } catch (error) {
+    console.error('Could not load RT damage reports:', error);
+    res.status(500).json({ error: 'Could not load RT damage reports. Please try again.' });
+  }
+});
+
+app.get('/api/rt-damage/:id/photo', async (req, res) => {
+  const reportId = Number(req.params.id);
+  if (!Number.isSafeInteger(reportId) || reportId < 1) {
+    return res.status(400).json({ error: 'Choose a valid RT damage report.' });
+  }
+  try {
+    const photo = await req.app.locals.db.get(
+      `SELECT photo_mime_type AS mimeType, photo_data AS data
+       FROM rt_damage_reports WHERE id = ? AND company_id = ?`,
+      [reportId, req.user.companyId]
+    );
+    if (!photo) return res.status(404).json({ error: 'RT damage photo not found.' });
+    res.set({
+      'Cache-Control': 'no-store',
+      'Content-Type': photo.mimeType,
+      'X-Content-Type-Options': 'nosniff'
+    });
+    res.send(photo.data);
+  } catch (error) {
+    console.error('Could not load RT damage photo:', error);
+    res.status(500).json({ error: 'Could not load the RT damage photo. Please try again.' });
+  }
+});
+
+app.post('/api/rt-damage', damagePhotoUpload.single('photo'), async (req, res) => {
+  const rtNumber = String(req.body.rtNumber || '').trim();
+  const damageDate = normalizeDeliveryDate(req.body.damageDate);
+  if (!rtNumber || rtNumber.length > 64 || /[\u0000-\u001f\u007f]/.test(rtNumber)) {
+    return res.status(400).json({ error: 'Enter an RT number of up to 64 characters.' });
+  }
+  if (!damageDate) {
+    return res.status(400).json({ error: 'Choose a valid date for the RT damage report.' });
+  }
+  if (!req.file) {
+    return res.status(400).json({ error: 'Take or choose a photo of the damaged stock.' });
+  }
+  const mimeType = getSupportedImageType(req.file.buffer);
+  if (!mimeType) {
+    return res.status(400).json({ error: 'The selected file is not a valid JPEG, PNG, or WebP photo.' });
+  }
+
+  try {
+    const result = await req.app.locals.db.run(
+      `INSERT INTO rt_damage_reports
+         (company_id, user_id, rt_number, damage_date, photo_mime_type, photo_data)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [req.user.companyId, req.user.id, rtNumber, damageDate, mimeType, req.file.buffer]
+    );
+    res.status(201).json({ message: 'RT damage report saved.', id: result.lastID });
+  } catch (error) {
+    console.error('Could not save RT damage report:', error);
+    res.status(500).json({ error: 'Could not save the RT damage report. Please try again.' });
+  }
+});
+
 app.post('/api/users', async (req, res) => {
   try {
     const user = validateUserDetails({ ...req.body, companyName: req.user.companyName });
     const password = await hashPassword(user.password);
     const result = await req.app.locals.db.run(
-      `INSERT INTO users (full_name, position, company_id, company_name, user_id, password_salt, password_hash, role)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [user.fullName, user.position, req.user.companyId, req.user.companyName, user.userId, password.salt, password.hash, user.role]
+      `INSERT INTO users (full_name, position, company_id, company_name, email, user_id, password_salt, password_hash, role)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [user.fullName, user.position, req.user.companyId, req.user.companyName, user.email, user.userId, password.salt, password.hash, user.role]
     );
     res.status(201).json({ message: 'User created successfully.', id: result.lastID });
   } catch (error) {
     if (error.message.startsWith('SQLITE_CONSTRAINT')) {
-      return res.status(409).json({ error: 'That user ID is already in use.' });
+      const message = error.message.includes('users.email')
+        ? 'That email address is already in use.'
+        : 'That user ID is already in use.';
+      return res.status(409).json({ error: message });
     }
-    if (/Enter |User ID|Password|role/i.test(error.message)) {
+    if (/Enter |User ID|Password|role|email/i.test(error.message)) {
       return res.status(400).json({ error: error.message });
     }
     console.error('Could not create user:', error);
@@ -469,6 +715,66 @@ app.patch('/api/bills/:id/assignment', async (req, res) => {
   } catch (error) {
     console.error('Could not assign delivery:', error);
     res.status(500).json({ error: 'Could not assign delivery. Please try again.' });
+  }
+});
+
+app.patch('/api/bills/assignments', async (req, res) => {
+  if (!['admin', 'manager'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Only administrators and managers can assign deliveries.' });
+  }
+
+  const billIds = req.body.billIds;
+  const partnerId = Number(req.body.partnerId);
+  if (
+    !Array.isArray(billIds) ||
+    billIds.length < 1 ||
+    billIds.length > 500 ||
+    billIds.some(id => !Number.isSafeInteger(Number(id)) || Number(id) < 1) ||
+    new Set(billIds.map(Number)).size !== billIds.length ||
+    !Number.isSafeInteger(partnerId) ||
+    partnerId < 1
+  ) {
+    return res.status(400).json({ error: 'Choose one or more valid bills and a delivery partner.' });
+  }
+
+  const db = req.app.locals.db;
+  let transactionOpen = false;
+  try {
+    await db.exec('BEGIN IMMEDIATE');
+    transactionOpen = true;
+    const partner = await db.get(
+      "SELECT id FROM users WHERE id = ? AND company_id = ? AND role = 'delivery_partner'",
+      [partnerId, req.user.companyId]
+    );
+    if (!partner) {
+      await db.exec('ROLLBACK');
+      transactionOpen = false;
+      return res.status(400).json({ error: 'Choose an active delivery partner from your workspace.' });
+    }
+
+    const placeholders = billIds.map(() => '?').join(', ');
+    const matchingBills = await db.all(
+      `SELECT id FROM bills WHERE company_id = ? AND id IN (${placeholders})`,
+      [req.user.companyId, ...billIds.map(Number)]
+    );
+    if (matchingBills.length !== billIds.length) {
+      await db.exec('ROLLBACK');
+      transactionOpen = false;
+      return res.status(404).json({ error: 'One or more selected bills were not found in your workspace.' });
+    }
+
+    await db.run(
+      `UPDATE bills SET assigned_to = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE company_id = ? AND id IN (${placeholders})`,
+      [partnerId, req.user.companyId, ...billIds.map(Number)]
+    );
+    await db.exec('COMMIT');
+    transactionOpen = false;
+    res.json({ message: `${billIds.length} ${billIds.length === 1 ? 'bill' : 'bills'} assigned successfully.`, assignedCount: billIds.length });
+  } catch (error) {
+    if (transactionOpen) await db.exec('ROLLBACK');
+    console.error('Could not bulk assign deliveries:', error);
+    res.status(500).json({ error: 'Could not assign the selected deliveries. Please try again.' });
   }
 });
 
@@ -1061,6 +1367,7 @@ app.post('/api/bills/reconcile', async (req, res) => {
       const id = Number(item.id);
       const delivered = Number(item.qty_delivered);
       const returned = Number(item.qty_returned);
+      const returnType = String(item.return_type || '');
       const currentItem = await db.get(
         'SELECT qty_ordered FROM bill_items WHERE id = ? AND bill_id = ?',
         [id, Number(billId)]
@@ -1074,16 +1381,18 @@ app.post('/api/bills/reconcile', async (req, res) => {
         !Number.isSafeInteger(returned) ||
         delivered < 0 ||
         returned < 0 ||
-        delivered + returned > currentItem.qty_ordered
+        delivered + returned > currentItem.qty_ordered ||
+        (returned > 0 && !['R', 'DA', 'DUE'].includes(returnType)) ||
+        (returned === 0 && returnType !== '')
       ) {
         await db.exec('ROLLBACK');
-        return res.status(400).json({ error: 'Item quantities must be whole numbers and cannot exceed the ordered quantity.' });
+        return res.status(400).json({ error: 'Enter valid whole-number quantities; returned stock must have a return type (R, DA, or DUE).' });
       }
 
       seenIds.add(id);
       await db.run(
-        'UPDATE bill_items SET qty_delivered = ?, qty_returned = ? WHERE id = ?',
-        [delivered, returned, id]
+        'UPDATE bill_items SET qty_delivered = ?, qty_returned = ?, return_type = ? WHERE id = ?',
+        [delivered, returned, returnType, id]
       );
     }
 
@@ -1109,7 +1418,10 @@ app.post('/api/bills/reconcile', async (req, res) => {
 app.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {
     const status = error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
-    return res.status(status).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'Files must be 10 MB or smaller.' : error.message });
+    const sizeError = req.path === '/api/rt-damage'
+      ? 'Photos must be 8 MB or smaller.'
+      : 'Files must be 10 MB or smaller.';
+    return res.status(status).json({ error: error.code === 'LIMIT_FILE_SIZE' ? sizeError : error.message });
   }
   if (error) {
     return res.status(400).json({ error: error.message });

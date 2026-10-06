@@ -48,6 +48,9 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .auth-card-footer { display: flex; justify-content: center; gap: 5px; margin-top: 19px; color: #8a948e; font-size: 10px; }
 .auth-card-footer a { color: #28784f; font-weight: 600; text-decoration: none; }
 .auth-card-footer a:hover { text-decoration: underline; }
+.auth-form-link { margin-top: -6px; text-align: right; font-size: 10px; }
+.auth-form-link a { color: #28784f; font-weight: 600; text-decoration: none; }
+.auth-form-link a:hover { text-decoration: underline; }
 .auth-setup-note { margin-top: 18px; padding: 11px; border: 1px solid #eaf0ec; border-radius: 7px; color: #7c8981; background: #f8faf8; font-size: 9px; line-height: 1.6; }
 .auth-footer { padding: 17px; color: #a1aaa4; font-size: 9px; text-align: center; }
 .creator-credit { color: #78857d; font-size: 10px; }

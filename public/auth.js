@@ -41,7 +41,14 @@ if (form) {
         body: JSON.stringify(Object.fromEntries(new FormData(form)))
       });
       const result = await readResponse(response);
-      if (form.dataset.action === 'create-user') {
+      if (form.dataset.action === 'forgot-password') {
+        form.reset();
+        showMessage(result.message, true);
+      } else if (form.dataset.action === 'reset-password') {
+        showMessage(result.message, true);
+        form.reset();
+        window.setTimeout(() => window.location.assign('/login'), 1200);
+      } else if (form.dataset.action === 'create-user') {
         form.reset();
         showMessage(result.message, true);
         await loadUsers();
@@ -69,13 +76,14 @@ async function loadUsers() {
     const workspaceName = document.querySelector('#company-workspace-name');
     if (workspaceName) workspaceName.textContent = session.user.companyName;
     if (!users.length) {
-      list.innerHTML = '<tr><td colspan="5" class="user-list-empty">No team members yet.</td></tr>';
+      list.innerHTML = '<tr><td colspan="6" class="user-list-empty">No team members yet.</td></tr>';
       return;
     }
 
     list.innerHTML = users.map(user => `
       <tr>
         <td><div class="user-list-name"><strong>${escapeHtml(user.fullName)}</strong><span>${escapeHtml(user.userId)}</span></div></td>
+        <td>${escapeHtml(user.email || '—')}</td>
         <td>${escapeHtml(user.position)}</td>
         <td>${escapeHtml(user.companyName)}</td>
         <td><span class="user-role">${escapeHtml(roleLabel(user.role))}</span></td>
@@ -85,7 +93,7 @@ async function loadUsers() {
       </tr>
     `).join('');
   } catch (error) {
-    list.innerHTML = `<tr><td colspan="5" class="user-list-empty">${escapeHtml(error.message)}</td></tr>`;
+    list.innerHTML = `<tr><td colspan="6" class="user-list-empty">${escapeHtml(error.message)}</td></tr>`;
   }
 }
 
@@ -128,5 +136,10 @@ document.querySelectorAll('[data-logout]').forEach(button => {
     }
   });
 });
+
+const resetTokenField = document.querySelector('[name="token"]');
+if (resetTokenField) {
+  resetTokenField.value = new URLSearchParams(window.location.search).get('token') || '';
+}
 
 loadUsers();
