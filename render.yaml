@@ -3,7 +3,7 @@ services:
     name: taf-disti-desk
     runtime: node
     plan: starter
-    buildCommand: npm ci
+    buildCommand: npm_config_build_from_source=true npm ci
     startCommand: npm start
     healthCheckPath: /health
     disk:

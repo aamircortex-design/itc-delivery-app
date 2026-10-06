@@ -4,7 +4,8 @@
 
 - Push the project code to a private GitHub repository. Do not commit `.env` files,
   `node_modules`, uploaded files, or `delivery.sqlite`.
-- The Render Blueprint in `render.yaml` creates a Node web service and mounts a
+- The Render Blueprint in `render.yaml` compiles `sqlite3` from source to match
+  Render's system libraries, creates a Node web service, and mounts a
   persistent disk at `/var/data`. The app stores its SQLite database at
   `/var/data/delivery.sqlite`.
 - The Blueprint uses a paid web-service plan because the SQLite database requires
