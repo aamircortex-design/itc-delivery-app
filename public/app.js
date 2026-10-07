@@ -17,6 +17,7 @@ let deliveryPartners = [];
 let currentUser = null;
 let selectedFile = null;
 let activeBill = null;
+let selectedSalesmanFilter = '';
 const selectedBillIds = new Set();
 let toastTimeout;
 let selectedDeliveryDate = getLocalDateValue();
@@ -160,10 +161,12 @@ function visibleDeliveries() {
   const status = document.querySelector('#status-filter').value;
   return getSelectedDayDeliveries().filter(bill => {
     const matchesStatus = status === 'All' || bill.status === status;
+    const matchesSalesman = !selectedSalesmanFilter ||
+      String(bill.salesman || '').trim().toLocaleLowerCase() === selectedSalesmanFilter.toLocaleLowerCase();
     const searchable = [bill.bill_no, bill.outlet_name, bill.address, ...bill.items.map(item => item.item_name)]
       .join(' ')
       .toLowerCase();
-    return matchesStatus && (!query || searchable.includes(query));
+    return matchesSalesman && matchesStatus && (!query || searchable.includes(query));
   });
 }
 
@@ -172,6 +175,7 @@ function renderRows() {
   const emptyState = document.querySelector('#empty-state');
   const emptyTitle = document.querySelector('#empty-title');
   const emptyCopy = document.querySelector('#empty-copy');
+  updateSalesmanOptions();
   const filtered = visibleDeliveries();
   const visibleIds = new Set(filtered.map(bill => bill.id));
   for (const billId of selectedBillIds) {
@@ -228,7 +232,6 @@ function renderRows() {
       ${assignmentCell}${actionCell}
     </tr>`;
   }).join('');
-  updateSalesmanOptions();
   updateBulkAssignmentControls(filtered);
 
   const showEmpty = filtered.length === 0;
@@ -338,14 +341,18 @@ function updateSalesmanOptions() {
     }
   }
 
-  select.innerHTML = '<option value="">Choose a salesman</option>' +
+  const placeholder = salesmen.size ? 'Filter by salesman' : 'No salesman names for this date';
+  select.innerHTML = `<option value="">${placeholder}</option>` +
     [...salesmen.values()]
       .sort((left, right) => left.localeCompare(right))
       .map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
       .join('');
   if ([...salesmen.values()].some(name => name.toLocaleLowerCase() === currentValue.toLocaleLowerCase())) {
     select.value = currentValue;
+  } else {
+    selectedSalesmanFilter = '';
   }
+  selectedSalesmanFilter = select.value.trim();
   document.querySelector('#select-salesman-outlets').disabled = !select.value;
 }
 
@@ -361,6 +368,7 @@ function selectSalesmanOutlets() {
     return;
   }
 
+  selectedSalesmanFilter = salesman;
   selectedBillIds.clear();
   document.querySelector('#search-input').value = '';
   document.querySelector('#status-filter').value = 'All';
@@ -856,7 +864,11 @@ document.querySelector('#select-visible-bills').addEventListener('change', event
 });
 document.querySelector('#bulk-partner-select').addEventListener('change', () => updateBulkAssignmentControls());
 document.querySelector('#bulk-salesman-select').addEventListener('change', event => {
-  document.querySelector('#select-salesman-outlets').disabled = !event.currentTarget.value;
+  selectedSalesmanFilter = event.currentTarget.value.trim();
+  selectedBillIds.clear();
+  document.querySelector('#select-visible-bills').checked = false;
+  document.querySelector('#select-salesman-outlets').disabled = !selectedSalesmanFilter;
+  renderRows();
 });
 document.querySelector('#select-salesman-outlets').addEventListener('click', selectSalesmanOutlets);
 document.querySelector('#assign-selected-bills').addEventListener('click', assignSelectedBills);
