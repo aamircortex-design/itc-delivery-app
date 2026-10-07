@@ -155,6 +155,8 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .progress-pending { display: block; margin-top: 5px; color: #a2782d; font-size: 8px; font-weight: 600; }
 .progress-pending:where(:not(:empty)) { white-space: nowrap; }
 .status-pill { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border-radius: 5px; font-size: 9px; font-weight: 600; white-space: nowrap; }
+.status-details { display: grid; justify-items: start; gap: 4px; min-width: 100px; }
+.status-time { color: #89938d; font-size: 8px; line-height: 1.25; white-space: nowrap; }
 .status-pill::before { width: 5px; height: 5px; border-radius: 50%; background: currentColor; content: ""; }
 .status-pending { color: #a2782d; background: #fbf5e8; }
 .status-in-progress { color: #5078af; background: #edf3fb; }

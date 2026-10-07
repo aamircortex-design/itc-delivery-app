@@ -1408,10 +1408,26 @@ app.post('/api/bills/reconcile', async (req, res) => {
       [Number(billId)]
     );
     const status = getBillStatus(totals);
+    const progressUpdatedAt = new Date().toISOString();
 
     await db.run(
-      'UPDATE bills SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND company_id = ?',
-      [status, Number(billId), req.user.companyId]
+      `UPDATE bills SET status = ?, updated_at = CURRENT_TIMESTAMP,
+         progress_started_at = COALESCE(progress_started_at, ?),
+         progress_updated_at = ?,
+         completed_at = CASE
+           WHEN ? THEN COALESCE(completed_at, ?)
+           ELSE NULL
+         END
+       WHERE id = ? AND company_id = ?`,
+      [
+        status,
+        progressUpdatedAt,
+        progressUpdatedAt,
+        status === 'Completed' || status === 'Returned' ? 1 : 0,
+        progressUpdatedAt,
+        Number(billId),
+        req.user.companyId
+      ]
     );
     await db.exec('COMMIT');
     res.json({ message: 'Delivery progress saved.', status });

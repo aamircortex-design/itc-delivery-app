@@ -66,6 +66,32 @@ function formatDate(value) {
   }).format(date);
 }
 
+function formatDateTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat(undefined, {
+    day: 'numeric',
+    month: 'short',
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(date);
+}
+
+function formatDuration(start, end = new Date()) {
+  if (!start) return '';
+  const startTime = new Date(start).getTime();
+  const endTime = end instanceof Date ? end.getTime() : new Date(end).getTime();
+  if (Number.isNaN(startTime) || Number.isNaN(endTime) || endTime < startTime) return '';
+
+  const totalMinutes = Math.floor((endTime - startTime) / 60000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days) return `${days}d ${hours}h ${minutes}m`;
+  if (hours) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
 function getLocalDateValue(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -183,13 +209,19 @@ function renderRows() {
     const selectionCell = ['admin', 'manager'].includes(currentUser?.role)
       ? `<td><input class="bill-select-checkbox" type="checkbox" data-select-bill="${bill.id}" aria-label="Select bill ${escapeHtml(bill.bill_no)}" ${selectedBillIds.has(bill.id) ? 'checked' : ''}></td>`
       : '';
+    const duration = formatDuration(bill.progress_started_at, bill.completed_at || new Date());
+    const timingDetails = [
+      bill.progress_started_at ? `Started ${formatDateTime(bill.progress_started_at)}` : '',
+      bill.progress_updated_at ? `Updated ${formatDateTime(bill.progress_updated_at)}` : '',
+      duration ? `${bill.completed_at ? 'Duration' : 'Elapsed'} ${duration}` : ''
+    ].filter(Boolean);
     return `<tr>
       ${selectionCell}
       <td><div class="bill-cell"><span class="bill-number">#${escapeHtml(bill.bill_no)}</span><span class="bill-date">${escapeHtml(formatDate(bill.delivery_date || bill.created_at))}</span></div></td>
       <td><div class="outlet-cell"><span class="outlet-name" title="${escapeHtml(bill.outlet_name)}">${escapeHtml(bill.outlet_name)}</span><span class="outlet-address" title="${escapeHtml(bill.address || 'No address listed')}">${escapeHtml(bill.address || 'No address listed')}</span></div></td>
       <td><div class="item-summary">${itemPreview}${moreItems}${returnSummary}</div></td>
       <td class="progress-cell"><div class="progress-label"><span>${quantities.delivered.toLocaleString()} / ${quantities.total.toLocaleString()} delivered</span><strong>${percentage}%</strong></div><div class="progress-track" aria-label="${percentage}% resolved, ${escapeHtml(deliveryStatus)}"><div class="progress-bar" style="width:${percentage}%"></div></div><span class="progress-pending">${escapeHtml(deliveryStatus)}</span></td>
-      <td><span class="status-pill ${statusClass(bill.status)}">${escapeHtml(bill.status)}</span></td>
+      <td><div class="status-details"><span class="status-pill ${statusClass(bill.status)}">${escapeHtml(bill.status)}</span>${timingDetails.map(detail => `<span class="status-time">${escapeHtml(detail)}</span>`).join('')}</div></td>
       ${assignmentCell}${actionCell}
     </tr>`;
   }).join('');
