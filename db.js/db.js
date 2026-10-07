@@ -41,6 +41,7 @@ async function initDb() {
       bill_no TEXT NOT NULL,
       outlet_name TEXT NOT NULL,
       address TEXT NOT NULL,
+      salesman TEXT NOT NULL DEFAULT '',
       delivery_date TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'Pending',
       progress_started_at TEXT,
@@ -161,6 +162,9 @@ async function initDb() {
   if (!billColumns.some(column => column.name === 'delivery_date')) {
     await db.exec("ALTER TABLE bills ADD COLUMN delivery_date TEXT NOT NULL DEFAULT ''");
   }
+  if (!billColumns.some(column => column.name === 'salesman')) {
+    await db.exec("ALTER TABLE bills ADD COLUMN salesman TEXT NOT NULL DEFAULT ''");
+  }
   if (!billColumns.some(column => column.name === 'assigned_to')) {
     await db.exec('ALTER TABLE bills ADD COLUMN assigned_to INTEGER REFERENCES users(id) ON DELETE SET NULL');
   }
@@ -246,6 +250,7 @@ async function initDb() {
             bill_no TEXT NOT NULL,
             outlet_name TEXT NOT NULL,
             address TEXT NOT NULL,
+            salesman TEXT NOT NULL DEFAULT '',
             delivery_date TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'Pending',
             progress_started_at TEXT,
@@ -257,8 +262,8 @@ async function initDb() {
             UNIQUE (company_id, bill_no)
           );
           INSERT INTO bills_updated
-            (id, company_id, bill_no, outlet_name, address, delivery_date, status, progress_started_at, progress_updated_at, completed_at, created_at, updated_at, assigned_to)
-          SELECT id, company_id, bill_no, outlet_name, address, delivery_date, status, progress_started_at, progress_updated_at, completed_at, created_at, updated_at, assigned_to
+            (id, company_id, bill_no, outlet_name, address, salesman, delivery_date, status, progress_started_at, progress_updated_at, completed_at, created_at, updated_at, assigned_to)
+          SELECT id, company_id, bill_no, outlet_name, address, salesman, delivery_date, status, progress_started_at, progress_updated_at, completed_at, created_at, updated_at, assigned_to
           FROM bills;
           DROP TABLE bills;
           ALTER TABLE bills_updated RENAME TO bills;

@@ -792,6 +792,7 @@ const headerAliases = {
   billno: ['billno', 'billnumber', 'invoiceno', 'invoicenumber', 'orderid'],
   outletname: ['outletname', 'outlet', 'customername', 'storename', 'recipient'],
   address: ['address', 'deliveryaddress', 'location'],
+  salesman: ['salesman', 'salesmanname', 'salesperson', 'salespersonname', 'salesrep', 'salesrepresentative', 'representative', 'dsname'],
   itemname: ['itemname', 'item', 'productname', 'product'],
   quantity: ['quantity', 'qty', 'qtyordered', 'orderedquantity', 'invoiceqty'],
   invoiceDate: ['invoicedate', 'invoicesrdate', 'invoicesalesdate', 'salesdate', 'billdate', 'date'],
@@ -1070,6 +1071,21 @@ app.post('/api/bills/upload', upload.single('file'), async (req, res) => {
       }
     }
 
+    const salesmanByBillNumber = new Map();
+    for (const row of rows) {
+      if (!row.salesman) continue;
+      const existingSalesman = salesmanByBillNumber.get(row.billno);
+      if (existingSalesman && existingSalesman.toLowerCase() !== row.salesman.toLowerCase()) {
+        return res.status(400).json({
+          error: `Bill ${row.billno} has more than one salesman name. Check row ${row.rowNumber} and keep one salesman for each bill.`
+        });
+      }
+      salesmanByBillNumber.set(row.billno, existingSalesman || row.salesman);
+    }
+    for (const row of rows) {
+      row.salesman = salesmanByBillNumber.get(row.billno) || '';
+    }
+
     const aggregatedRows = new Map();
     for (const row of rows) {
       const key = `${row.billno}\u0000${row.itemname}`;
@@ -1117,15 +1133,16 @@ app.post('/api/bills/upload', upload.single('file'), async (req, res) => {
       }
 
       await req.app.locals.db.run(
-        `INSERT INTO bills (company_id, bill_no, outlet_name, address, delivery_date)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO bills (company_id, bill_no, outlet_name, address, salesman, delivery_date)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(company_id, bill_no) DO UPDATE SET
            outlet_name = excluded.outlet_name,
            address = excluded.address,
+           salesman = CASE WHEN excluded.salesman <> '' THEN excluded.salesman ELSE bills.salesman END,
            delivery_date = excluded.delivery_date,
            updated_at = CURRENT_TIMESTAMP
          WHERE bills.delivery_date = ''`,
-        [req.user.companyId, row.billno, row.outletname, row.address, row.deliveryDate]
+        [req.user.companyId, row.billno, row.outletname, row.address, row.salesman, row.deliveryDate]
       );
 
       bill = await req.app.locals.db.get(

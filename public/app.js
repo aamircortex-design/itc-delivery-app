@@ -215,16 +215,20 @@ function renderRows() {
       bill.progress_updated_at ? `Updated ${formatDateTime(bill.progress_updated_at)}` : '',
       duration ? `${bill.completed_at ? 'Duration' : 'Elapsed'} ${duration}` : ''
     ].filter(Boolean);
+    const salesmanDetails = bill.salesman
+      ? `<span class="outlet-salesman">Salesman: ${escapeHtml(bill.salesman)}</span>`
+      : '';
     return `<tr>
       ${selectionCell}
       <td data-label="Delivery"><div class="bill-cell"><span class="bill-number">#${escapeHtml(bill.bill_no)}</span><span class="bill-date">${escapeHtml(formatDate(bill.delivery_date || bill.created_at))}</span></div></td>
-      <td data-label="Outlet &amp; area"><div class="outlet-cell"><span class="outlet-name" title="${escapeHtml(bill.outlet_name)}">${escapeHtml(bill.outlet_name)}</span><span class="outlet-address" title="${escapeHtml(bill.address || 'No address listed')}">${escapeHtml(bill.address || 'No address listed')}</span></div></td>
+      <td data-label="Outlet &amp; area"><div class="outlet-cell"><span class="outlet-name" title="${escapeHtml(bill.outlet_name)}">${escapeHtml(bill.outlet_name)}</span><span class="outlet-address" title="${escapeHtml(bill.address || 'No address listed')}">${escapeHtml(bill.address || 'No address listed')}</span>${salesmanDetails}</div></td>
       <td data-label="Items"><div class="item-summary">${itemPreview}${moreItems}${returnSummary}</div></td>
       <td class="progress-cell" data-label="Progress"><div class="progress-label"><span>${quantities.delivered.toLocaleString()} / ${quantities.total.toLocaleString()} delivered</span><strong>${percentage}%</strong></div><div class="progress-track" aria-label="${percentage}% resolved, ${escapeHtml(deliveryStatus)}"><div class="progress-bar" style="width:${percentage}%"></div></div><span class="progress-pending">${escapeHtml(deliveryStatus)}</span></td>
       <td data-label="Status"><div class="status-details"><span class="status-pill ${statusClass(bill.status)}">${escapeHtml(bill.status)}</span>${timingDetails.map(detail => `<span class="status-time">${escapeHtml(detail)}</span>`).join('')}</div></td>
       ${assignmentCell}${actionCell}
     </tr>`;
   }).join('');
+  updateSalesmanOptions();
   updateBulkAssignmentControls(filtered);
 
   const showEmpty = filtered.length === 0;
@@ -323,6 +327,50 @@ async function loadDeliveryPartners() {
     deliveryPartners.map(partner => `<option value="${partner.id}">${escapeHtml(partner.fullName)}</option>`).join('');
 }
 
+function updateSalesmanOptions() {
+  const select = document.querySelector('#bulk-salesman-select');
+  const currentValue = select.value;
+  const salesmen = new Map();
+  for (const bill of getSelectedDayDeliveries()) {
+    const name = String(bill.salesman || '').trim();
+    if (name && !salesmen.has(name.toLocaleLowerCase())) {
+      salesmen.set(name.toLocaleLowerCase(), name);
+    }
+  }
+
+  select.innerHTML = '<option value="">Choose a salesman</option>' +
+    [...salesmen.values()]
+      .sort((left, right) => left.localeCompare(right))
+      .map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
+      .join('');
+  if ([...salesmen.values()].some(name => name.toLocaleLowerCase() === currentValue.toLocaleLowerCase())) {
+    select.value = currentValue;
+  }
+  document.querySelector('#select-salesman-outlets').disabled = !select.value;
+}
+
+function selectSalesmanOutlets() {
+  const salesman = document.querySelector('#bulk-salesman-select').value.trim();
+  if (!salesman) return;
+
+  const matchingBills = getSelectedDayDeliveries().filter(bill =>
+    String(bill.salesman || '').trim().toLocaleLowerCase() === salesman.toLocaleLowerCase()
+  );
+  if (!matchingBills.length) {
+    showToast(`No outlets are mapped to ${salesman} for ${formatDate(selectedDeliveryDate)}.`, true);
+    return;
+  }
+
+  selectedBillIds.clear();
+  document.querySelector('#search-input').value = '';
+  document.querySelector('#status-filter').value = 'All';
+  for (const bill of matchingBills) selectedBillIds.add(bill.id);
+  renderRows();
+
+  const outletCount = new Set(matchingBills.map(bill => String(bill.outlet_name).trim().toLocaleLowerCase())).size;
+  showToast(`Selected ${outletCount} ${outletCount === 1 ? 'outlet' : 'outlets'} across ${matchingBills.length} bills for ${salesman}. Choose a delivery partner to assign them.`);
+}
+
 function updateBulkAssignmentControls(visibleBills = visibleDeliveries()) {
   const visibleIds = visibleBills.map(bill => bill.id);
   const selectedVisibleCount = visibleIds.filter(id => selectedBillIds.has(id)).length;
@@ -351,6 +399,7 @@ async function assignSelectedBills() {
     });
     selectedBillIds.clear();
     document.querySelector('#select-visible-bills').checked = false;
+    document.querySelector('#bulk-salesman-select').value = '';
     document.querySelector('#bulk-partner-select').value = '';
     await loadDeliveries();
     showToast(result.message);
@@ -505,9 +554,11 @@ async function uploadFile() {
       : `Imported ${result.billsImported} ${result.billsImported === 1 ? 'bill' : 'bills'} (${result.rowsImported} item lines) for ${formatDate(result.deliveryDate)}.`;
     showToast([importSummary, ...skippedNotes].join(' '));
   } catch (error) {
-    uploadError.textContent = error.message;
+    uploadError.textContent = error instanceof TypeError
+      ? 'Could not reach the app server. Check that the app is running and try again. Your file was not uploaded.'
+      : error.message;
     uploadError.hidden = false;
-    showToast(error.message, true);
+    showToast(uploadError.textContent, true);
   } finally {
     confirmUpload.disabled = !selectedFile;
     document.querySelector('#cancel-upload').disabled = false;
@@ -742,10 +793,10 @@ async function saveDamageReport(event) {
 
 function downloadTemplate() {
   const csv = [
-    'Bill No,Outlet Name,Address,Item Name,Quantity',
-    'ITC-1001,Green Corner Store,12 Market Road Mumbai,Sunfeast Dark Fantasy,24',
-    'ITC-1001,Green Corner Store,12 Market Road Mumbai,Aashirvaad Atta,10',
-    'ITC-1002,Daily Needs Mart,45 Park Street Pune,Bingo Mad Angles,18'
+    'Bill No,Outlet Name,Address,Item Name,Quantity,Salesman Name',
+    'ITC-1001,Green Corner Store,12 Market Road Mumbai,Sunfeast Dark Fantasy,24,Amit Kumar',
+    'ITC-1001,Green Corner Store,12 Market Road Mumbai,Aashirvaad Atta,10,Amit Kumar',
+    'ITC-1002,Daily Needs Mart,45 Park Street Pune,Bingo Mad Angles,18,Rahul Sharma'
   ].join('\r\n');
   const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }));
   const link = document.createElement('a');
@@ -801,6 +852,10 @@ document.querySelector('#select-visible-bills').addEventListener('change', event
   renderRows();
 });
 document.querySelector('#bulk-partner-select').addEventListener('change', () => updateBulkAssignmentControls());
+document.querySelector('#bulk-salesman-select').addEventListener('change', event => {
+  document.querySelector('#select-salesman-outlets').disabled = !event.currentTarget.value;
+});
+document.querySelector('#select-salesman-outlets').addEventListener('click', selectSalesmanOutlets);
 document.querySelector('#assign-selected-bills').addEventListener('click', assignSelectedBills);
 document.querySelector('#cancel-reconcile').addEventListener('click', () => reconcileDialog.close());
 document.querySelector('#fill-bill-delivered').addEventListener('click', fillBillAsFullyDelivered);

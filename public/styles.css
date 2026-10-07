@@ -118,6 +118,7 @@ h1 span { color: #7f8984; font-weight: 500; }
 .bulk-partner-label { margin-left: auto; color: #6f7c74; font-size: 10px; }
 .bulk-assignment .assignment-select { min-width: 155px; }
 .bulk-assignment .button { min-height: 32px; padding: 0 10px; font-size: 9px; }
+.bulk-assignment .button:disabled { cursor: not-allowed; opacity: .48; }
 .search-box { display: flex; width: 210px; height: 34px; align-items: center; gap: 7px; padding: 0 8px; border: 1px solid #e7ebe8; border-radius: 6px; color: #8d9792; }
 .search-box:focus-within { border-color: #94baa5; box-shadow: 0 0 0 3px rgba(25, 118, 80, .07); }
 .search-box > svg { width: 15px; height: 15px; flex: 0 0 auto; }
@@ -144,6 +145,7 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .outlet-cell { display: grid; max-width: 210px; gap: 4px; }
 .outlet-name { overflow: hidden; color: #36423c; font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .outlet-address { overflow: hidden; color: #969f9a; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.outlet-salesman { overflow: hidden; color: #567663; font-size: 8px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .item-summary { display: grid; gap: 4px; color: #59665f; font-size: 9px; white-space: nowrap; }
 .item-summary span + span { color: #a0a8a3; }
 .item-summary .return-type-summary { color: #9a682e; font-size: 8px; font-weight: 600; }

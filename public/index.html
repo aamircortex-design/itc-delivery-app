@@ -152,6 +152,11 @@
               <label class="bulk-select-all"><input id="select-visible-bills" type="checkbox"><span>Select visible bills</span></label>
               <span class="bulk-selection-count" id="bulk-selection-count">0 selected</span>
               <label class="bulk-partner-label" for="bulk-partner-select">Assign selected to</label>
+              <label class="visually-hidden" for="bulk-salesman-select">Select outlets by salesman</label>
+              <select id="bulk-salesman-select" class="assignment-select" aria-label="Select outlets by salesman">
+                <option value="">Choose a salesman</option>
+              </select>
+              <button class="button button-secondary" id="select-salesman-outlets" type="button" disabled>Select outlets</button>
               <select id="bulk-partner-select" class="assignment-select" aria-label="Delivery partner for selected bills">
                 <option value="">Choose a delivery partner</option>
               </select>
@@ -192,8 +197,8 @@
       </div>
       <input class="visually-hidden" id="file-input" type="file" accept=".xlsx,.csv">
       <div class="format-note">
-        <strong>Daily sales register columns:</strong>
-        <span>Invoice No., Item Name, Invoice Qty, Outlet Name, Invoice / SR Date. Beat is shown as the delivery area; the register has no street address. The sample sheet is also supported.</span>
+        <strong>Sales Register - Itemwise format:</strong>
+        <span>Upload the exported Sales Register - Itemwise CSV or Excel file directly; its report heading rows and column order are supported. Choose one date from the register's invoice dates. Positive Invoice Qty lines are imported, sales-return-only lines are skipped, and DS Name is used to select the mapped outlets for assignment. The Bill No sample sheet is optional.</span>
         <button type="button" class="text-link" id="modal-template">Download sample sheet</button>
       </div>
       <div class="dialog-error" id="upload-error" role="alert" hidden></div>
