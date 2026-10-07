@@ -255,6 +255,7 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .return-type-select:disabled { color: #a1aaa5; background: #f6f8f6; }
 .item-delivered-action { min-height: 28px; padding: 0 6px; border: 1px solid #dce9e0; border-radius: 5px; color: #34704b; background: #f4faf5; font-size: 8px; font-weight: 600; line-height: 1.2; }
 .item-delivered-action:hover { border-color: #a9cbb5; background: #eaf5ee; }
+.item-delivered-action:disabled, .reconcile-shortcut .button:disabled { cursor: not-allowed; opacity: .48; }
 .item-delivered-action.is-fully-delivered { border-color: #2f8a55; color: #fff; background: #328651; }
 .item-delivered-action.is-fully-delivered:hover { border-color: #277446; background: #277446; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
@@ -272,18 +273,19 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
   .stat-card { padding-right: 12px; padding-left: 12px; }
 }
 @media (max-width: 760px) {
-  .sidebar { position: relative; bottom: auto; width: 100%; height: auto; flex-direction: row; align-items: center; padding: max(10px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 10px max(16px, env(safe-area-inset-left)); }
+  .sidebar { position: relative; bottom: auto; width: 100%; height: auto; flex-flow: row wrap; align-items: center; row-gap: 10px; padding: max(10px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 10px max(16px, env(safe-area-inset-left)); }
   .brand { margin: 0 auto 0 0; font-size: 18px; }
   .brand-mark { width: 29px; height: 29px; }
   .nav-caption, .sidebar-bottom { display: none; }
-  .side-nav { display: flex; max-width: 65vw; margin: 0; overflow-x: auto; }
+  .side-nav { display: flex; width: 100%; max-width: 100%; margin: 0; overflow-x: auto; }
   .nav-link { min-height: 35px; flex: 0 0 auto; gap: 7px; padding: 0 9px; font-size: 11px; }
   .damage-nav-link { width: auto; }
   .nav-link svg { width: 16px; height: 16px; }
   .nav-link:first-child { display: none; }
   .nav-count { min-width: 18px; height: 18px; }
   .main-content { margin-left: 0; }
-  .topbar { height: 47px; padding: 0 max(17px, env(safe-area-inset-right)) 0 max(17px, env(safe-area-inset-left)); }
+  .topbar { height: 47px; justify-content: flex-end; padding: 0 max(17px, env(safe-area-inset-right)) 0 max(17px, env(safe-area-inset-left)); }
+  .breadcrumbs, .topbar-divider { display: none; }
   .topbar-right { gap: 8px; }
   .day-picker { min-height: 31px; gap: 6px; padding: 0 7px; }
   .day-picker input { width: 105px; font-size: 10px; }
@@ -302,7 +304,22 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
   .table-controls { width: 100%; }
   .search-box { width: auto; flex: 1; }
   .filter-select { flex: 0 0 auto; }
-  table { min-width: 780px; }
+  .table-scroll { overflow: visible; padding: 0 10px 10px; }
+  table { display: block; width: 100%; min-width: 0; }
+  thead { display: none; }
+  tbody { display: grid; gap: 10px; }
+  tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: hidden; border: 1px solid #e9ecea; border-radius: 8px; background: #fff; }
+  tbody td { display: grid; min-width: 0; height: auto; min-height: 54px; align-content: start; gap: 6px; padding: 10px; border-top: 1px solid #f0f2f0; font-size: 10px; }
+  tbody td::before { color: #929b96; content: attr(data-label); font-size: 8px; font-weight: 700; letter-spacing: .45px; text-transform: uppercase; }
+  tbody td[data-label="Select"] { grid-column: 1 / -1; min-height: 34px; justify-content: end; padding: 7px 10px; border-top: 0; }
+  tbody td[data-label="Select"]::before { display: none; }
+  .outlet-cell { max-width: 100%; }
+  .progress-cell { min-width: 0; }
+  .status-details { min-width: 0; }
+  .status-time { white-space: normal; }
+  .assignment-select { max-width: 100%; }
+  .table-footer { gap: 7px; padding: 0 12px; }
+  .footer-note { white-space: nowrap; }
   .page-footer { gap: 10px; font-size: 8px; }
 }
 @media (max-width: 430px) {
@@ -317,8 +334,24 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
   .bulk-assignment { padding: 9px 12px; gap: 8px; }
   .bulk-partner-label { margin-left: 0; }
   .bulk-assignment .assignment-select { min-width: 130px; flex: 1; }
-  .reconcile-list-heading, .reconcile-row { grid-template-columns: minmax(72px, 1fr) 34px 49px 49px 53px 72px; gap: 4px; }
-  .item-delivered-action { padding: 0 4px; font-size: 7px; }
-  .return-type-select { height: 29px; padding: 0 2px; font-size: 8px; }
-  .modal { padding: 22px 18px; }
+  .topbar { padding-right: max(10px, env(safe-area-inset-right)); padding-left: max(10px, env(safe-area-inset-left)); }
+  .export-button span { display: none; }
+  .export-button { width: 32px; min-width: 32px; padding: 0; }
+  .day-picker input { width: 100px; }
+  .reconcile-list-heading { display: none; }
+  .reconcile-items { display: grid; max-height: min(38dvh, 320px); gap: 8px; overflow-y: auto; border-top: 0; }
+  .reconcile-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 9px; border: 1px solid #edf0ee; border-radius: 7px; }
+  .reconcile-item-name { grid-column: 1 / -1; font-size: 11px; }
+  .reconcile-ordered { grid-column: 1 / -1; text-align: left; }
+  .reconcile-ordered::before { color: #89938d; content: "Ordered: "; }
+  .reconcile-row > label { display: grid; min-width: 0; gap: 4px; }
+  .reconcile-row > label::before { color: #89938d; content: "Delivered"; font-size: 8px; font-weight: 600; }
+  .reconcile-row > label:nth-of-type(2)::before { content: "Returned"; }
+  .reconcile-row > label:nth-of-type(3)::before { content: "Return type"; }
+  .quantity-input, .return-type-select { height: 36px; }
+  .item-delivered-action { grid-column: 1 / -1; min-height: 34px; font-size: 9px; }
+  .modal { width: calc(100% - 16px); max-height: calc(100dvh - 16px); padding: 20px 14px; }
+  .modal-actions { position: sticky; bottom: -20px; z-index: 1; padding: 9px 0 max(3px, env(safe-area-inset-bottom)); background: #fff; }
+  .reconcile-shortcut { margin-top: 0; }
+  .reconcile-shortcut .button { align-self: stretch; }
 }

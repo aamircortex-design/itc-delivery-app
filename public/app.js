@@ -201,13 +201,13 @@ function renderRows() {
     ).join('');
 
     const assignmentCell = ['admin', 'manager'].includes(currentUser?.role)
-      ? `<td><select class="assignment-select" data-assignment="${bill.id}" aria-label="Assign bill ${escapeHtml(bill.bill_no)}"><option value="">Unassigned</option>${deliveryPartners.map(partner => `<option value="${partner.id}" ${Number(bill.assigned_to) === partner.id ? 'selected' : ''}>${escapeHtml(partner.fullName)}</option>`).join('')}</select></td>`
+      ? `<td data-label="Delivery partner"><select class="assignment-select" data-assignment="${bill.id}" aria-label="Assign bill ${escapeHtml(bill.bill_no)}"><option value="">Unassigned</option>${deliveryPartners.map(partner => `<option value="${partner.id}" ${Number(bill.assigned_to) === partner.id ? 'selected' : ''}>${escapeHtml(partner.fullName)}</option>`).join('')}</select></td>`
       : '';
     const actionCell = currentUser?.role === 'manager'
-      ? '<td><span class="assignment-note">Assign a partner</span></td>'
-      : `<td><button class="row-action" type="button" data-reconcile="${bill.id}" aria-label="Update delivery ${escapeHtml(bill.bill_no)}"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6.5 12.5 3.6 3.6 7.7-8.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.7"/></svg>Update</button></td>`;
+      ? '<td data-label="Action"><span class="assignment-note">Assign a partner</span></td>'
+      : `<td data-label="Action"><button class="row-action" type="button" data-reconcile="${bill.id}" aria-label="Update delivery ${escapeHtml(bill.bill_no)}"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6.5 12.5 3.6 3.6 7.7-8.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.7"/></svg>Update</button></td>`;
     const selectionCell = ['admin', 'manager'].includes(currentUser?.role)
-      ? `<td><input class="bill-select-checkbox" type="checkbox" data-select-bill="${bill.id}" aria-label="Select bill ${escapeHtml(bill.bill_no)}" ${selectedBillIds.has(bill.id) ? 'checked' : ''}></td>`
+      ? `<td data-label="Select"><input class="bill-select-checkbox" type="checkbox" data-select-bill="${bill.id}" aria-label="Select bill ${escapeHtml(bill.bill_no)}" ${selectedBillIds.has(bill.id) ? 'checked' : ''}></td>`
       : '';
     const duration = formatDuration(bill.progress_started_at, bill.completed_at || new Date());
     const timingDetails = [
@@ -217,11 +217,11 @@ function renderRows() {
     ].filter(Boolean);
     return `<tr>
       ${selectionCell}
-      <td><div class="bill-cell"><span class="bill-number">#${escapeHtml(bill.bill_no)}</span><span class="bill-date">${escapeHtml(formatDate(bill.delivery_date || bill.created_at))}</span></div></td>
-      <td><div class="outlet-cell"><span class="outlet-name" title="${escapeHtml(bill.outlet_name)}">${escapeHtml(bill.outlet_name)}</span><span class="outlet-address" title="${escapeHtml(bill.address || 'No address listed')}">${escapeHtml(bill.address || 'No address listed')}</span></div></td>
-      <td><div class="item-summary">${itemPreview}${moreItems}${returnSummary}</div></td>
-      <td class="progress-cell"><div class="progress-label"><span>${quantities.delivered.toLocaleString()} / ${quantities.total.toLocaleString()} delivered</span><strong>${percentage}%</strong></div><div class="progress-track" aria-label="${percentage}% resolved, ${escapeHtml(deliveryStatus)}"><div class="progress-bar" style="width:${percentage}%"></div></div><span class="progress-pending">${escapeHtml(deliveryStatus)}</span></td>
-      <td><div class="status-details"><span class="status-pill ${statusClass(bill.status)}">${escapeHtml(bill.status)}</span>${timingDetails.map(detail => `<span class="status-time">${escapeHtml(detail)}</span>`).join('')}</div></td>
+      <td data-label="Delivery"><div class="bill-cell"><span class="bill-number">#${escapeHtml(bill.bill_no)}</span><span class="bill-date">${escapeHtml(formatDate(bill.delivery_date || bill.created_at))}</span></div></td>
+      <td data-label="Outlet &amp; area"><div class="outlet-cell"><span class="outlet-name" title="${escapeHtml(bill.outlet_name)}">${escapeHtml(bill.outlet_name)}</span><span class="outlet-address" title="${escapeHtml(bill.address || 'No address listed')}">${escapeHtml(bill.address || 'No address listed')}</span></div></td>
+      <td data-label="Items"><div class="item-summary">${itemPreview}${moreItems}${returnSummary}</div></td>
+      <td class="progress-cell" data-label="Progress"><div class="progress-label"><span>${quantities.delivered.toLocaleString()} / ${quantities.total.toLocaleString()} delivered</span><strong>${percentage}%</strong></div><div class="progress-track" aria-label="${percentage}% resolved, ${escapeHtml(deliveryStatus)}"><div class="progress-bar" style="width:${percentage}%"></div></div><span class="progress-pending">${escapeHtml(deliveryStatus)}</span></td>
+      <td data-label="Status"><div class="status-details"><span class="status-pill ${statusClass(bill.status)}">${escapeHtml(bill.status)}</span>${timingDetails.map(detail => `<span class="status-time">${escapeHtml(detail)}</span>`).join('')}</div></td>
       ${assignmentCell}${actionCell}
     </tr>`;
   }).join('');
@@ -544,15 +544,27 @@ function updateDeliveryShortcutStates() {
     const returnType = reconcileForm.elements.namedItem(`return-type-${item.id}`);
     returnType.disabled = returned === 0;
     if (returned === 0) returnType.value = '';
-    const fullyDelivered = delivered === Number(item.qty_ordered) && returned === 0;
+    const hasReturn = returned > 0;
+    const fullyDelivered = delivered === Number(item.qty_ordered) && !hasReturn;
     const itemButton = row.querySelector('[data-fully-delivered]');
+    itemButton.disabled = hasReturn;
+    itemButton.title = hasReturn
+      ? 'Clear the returned quantity before marking this item fully delivered.'
+      : 'Set delivered quantity to the ordered quantity.';
     itemButton.classList.toggle('is-fully-delivered', fullyDelivered);
     itemButton.setAttribute('aria-pressed', String(fullyDelivered));
     if (fullyDelivered) fullyDeliveredCount += 1;
   }
 
   const billButton = document.querySelector('#fill-bill-delivered');
-  const billFullyDelivered = fullyDeliveredCount === activeBill.items.length;
+  const hasReturns = activeBill.items.some(item =>
+    Number(reconcileForm.elements.namedItem(`returned-${item.id}`).value) > 0
+  );
+  const billFullyDelivered = !hasReturns && fullyDeliveredCount === activeBill.items.length;
+  billButton.disabled = hasReturns;
+  billButton.title = hasReturns
+    ? 'Clear all returned quantities before marking the whole bill fully delivered.'
+    : 'Mark every item as delivered.';
   billButton.classList.toggle('is-fully-delivered', billFullyDelivered);
   billButton.setAttribute('aria-pressed', String(billFullyDelivered));
 }
@@ -562,17 +574,19 @@ function fillItemAsFullyDelivered(itemId) {
   const item = activeBill.items.find(deliveryItem => deliveryItem.id === Number(itemId));
   if (!item) return;
 
-  const deliveredInput = reconcileForm.elements.namedItem(`delivered-${item.id}`);
   const returnedInput = reconcileForm.elements.namedItem(`returned-${item.id}`);
+  if (Number(returnedInput.value) > 0) return;
+  const deliveredInput = reconcileForm.elements.namedItem(`delivered-${item.id}`);
   deliveredInput.value = String(Number(item.qty_ordered));
-  returnedInput.value = '0';
-  reconcileForm.elements.namedItem(`return-type-${item.id}`).value = '';
   document.querySelector('#reconcile-error').hidden = true;
   updateDeliveryShortcutStates();
 }
 
 function fillBillAsFullyDelivered() {
   if (!activeBill) return;
+  if (activeBill.items.some(item =>
+    Number(reconcileForm.elements.namedItem(`returned-${item.id}`).value) > 0
+  )) return;
   for (const item of activeBill.items) {
     fillItemAsFullyDelivered(item.id);
   }
