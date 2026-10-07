@@ -8,6 +8,11 @@
   Render's system libraries, creates a Node web service, and mounts a
   persistent disk at `/var/data`. The app stores its SQLite database at
   `/var/data/delivery.sqlite`.
+- SQLite data is lost when Render replaces an instance unless the service has
+  that persistent disk attached. The app now refuses to start on Render when
+  `DATABASE_PATH` is missing, the `/var/data` disk is not mounted, or the
+  database path is outside that disk; it will not silently create a fresh
+  database in the temporary application directory.
 - The Blueprint uses a paid web-service plan because the SQLite database requires
   persistent storage. Review Render's current service and disk prices before you
   apply it.
@@ -16,6 +21,10 @@
 
 1. In Render, choose **New → Blueprint** and connect the private GitHub repository.
 2. Review the `taf-disti-desk` service, its persistent disk, and the estimated cost.
+   If the service already exists, confirm in its **Disks** settings that the
+   persistent disk is attached and mounted at `/var/data`, and in **Environment**
+   that `DATABASE_PATH` is `/var/data/delivery.sqlite`. Do not delete or replace an
+   existing disk when updating application code.
 3. Apply the Blueprint and wait for the `/health` deployment check to pass.
 4. Open the generated `https://...onrender.com` address. Complete first-time setup
    if the hosted database is empty, or sign in if you have migrated your accounts.

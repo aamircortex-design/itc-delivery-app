@@ -1,8 +1,27 @@
 const path = require('path');
+const fs = require('fs');
 const sqlite3 = require('sqlite3');
 const { open } = require('sqlite');
 
 async function initDb() {
+  if (process.env.RENDER_SERVICE_ID) {
+    if (!process.env.DATABASE_PATH) {
+      throw new Error('DATABASE_PATH is required on Render. Mount a persistent disk at /var/data and set DATABASE_PATH=/var/data/delivery.sqlite.');
+    }
+
+    const persistentDirectory = path.resolve('/var/data');
+    const databasePath = path.resolve(process.env.DATABASE_PATH);
+    const relativePath = path.relative(persistentDirectory, databasePath);
+    if (
+      !fs.existsSync(persistentDirectory) ||
+      relativePath === '..' ||
+      relativePath.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relativePath)
+    ) {
+      throw new Error('Render database must be stored on the persistent disk under /var/data. Verify the disk mount and DATABASE_PATH before starting the app.');
+    }
+  }
+
   const db = await open({
     filename: process.env.DATABASE_PATH || path.join(__dirname, '..', 'delivery.sqlite'),
     driver: sqlite3.Database
