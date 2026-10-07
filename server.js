@@ -1228,9 +1228,13 @@ app.get('/api/bills/export', async (req, res) => {
     const db = req.app.locals.db;
     const bills = await db.all(
       `SELECT * FROM bills
-       WHERE company_id = ? AND (delivery_date = ? OR (delivery_date = '' AND substr(created_at, 1, 10) = ?))
+       WHERE company_id = ? AND (
+         delivery_date = ?
+         OR (delivery_date = '' AND substr(created_at, 1, 10) = ?)
+         OR (status = 'Not supplied' AND not_supplied_from_date <= ?)
+       )
        ORDER BY bill_no`,
-      [req.user.companyId, selectedDate, selectedDate]
+      [req.user.companyId, selectedDate, selectedDate, selectedDate]
     );
 
     if (!bills.length) {
@@ -1275,7 +1279,9 @@ app.get('/api/bills/export', async (req, res) => {
         return totals;
       }, { ordered: 0, delivered: 0, returned: 0 });
       const remaining = Math.max(0, quantities.ordered - quantities.delivered - quantities.returned);
-      const status = getBillStatus(quantities);
+      const status = bill.status === 'Not supplied' && remaining > 0
+        ? 'Not supplied'
+        : getBillStatus(quantities);
 
       orderedUnits += quantities.ordered;
       deliveredUnits += quantities.delivered;
@@ -1368,6 +1374,82 @@ app.get('/api/bills', async (req, res) => {
   }
 });
 
+app.post('/api/bills/not-supplied', async (req, res) => {
+  if (req.user.role === 'manager') {
+    return res.status(403).json({ error: 'Only the assigned delivery partner or an administrator can mark a bill not supplied.' });
+  }
+
+  const billId = Number(req.body.billId);
+  const carryoverDate = normalizeDeliveryDate(req.body.deliveryDate);
+  if (!Number.isSafeInteger(billId) || billId < 1 || !carryoverDate) {
+    return res.status(400).json({ error: 'Choose a valid delivery and date.' });
+  }
+
+  const db = req.app.locals.db;
+  let transactionOpen = false;
+  try {
+    await db.exec('BEGIN IMMEDIATE');
+    transactionOpen = true;
+    const bill = req.user.role === 'delivery_partner'
+      ? await db.get(
+        'SELECT id, delivery_date, created_at FROM bills WHERE id = ? AND company_id = ? AND assigned_to = ?',
+        [billId, req.user.companyId, req.user.id]
+      )
+      : await db.get(
+        'SELECT id, delivery_date, created_at FROM bills WHERE id = ? AND company_id = ?',
+        [billId, req.user.companyId]
+      );
+    if (!bill) {
+      await db.exec('ROLLBACK');
+      transactionOpen = false;
+      return res.status(404).json({ error: 'Delivery not found.' });
+    }
+
+    const billDate = bill.delivery_date || String(bill.created_at || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(billDate) || carryoverDate < billDate) {
+      await db.exec('ROLLBACK');
+      transactionOpen = false;
+      return res.status(400).json({ error: 'The not-supplied date cannot be earlier than the bill date.' });
+    }
+
+    const totals = await db.get(
+      'SELECT SUM(qty_ordered) AS ordered, SUM(qty_delivered) AS delivered, SUM(qty_returned) AS returned FROM bill_items WHERE bill_id = ?',
+      [billId]
+    );
+    const status = getBillStatus(totals);
+    const remaining = Math.max(
+      0,
+      (Number(totals.ordered) || 0) -
+      (Number(totals.delivered) || 0) -
+      (Number(totals.returned) || 0)
+    );
+    if (remaining === 0 || status === 'Completed' || status === 'Returned') {
+      await db.exec('ROLLBACK');
+      transactionOpen = false;
+      return res.status(400).json({ error: 'This bill has no outstanding quantity to carry forward.' });
+    }
+
+    const notSuppliedFromDate = await db.get(
+      'SELECT not_supplied_from_date FROM bills WHERE id = ?',
+      [billId]
+    );
+    const effectiveDate = notSuppliedFromDate.not_supplied_from_date || carryoverDate;
+    await db.run(
+      `UPDATE bills SET status = 'Not supplied', not_supplied_from_date = ?,
+         updated_at = CURRENT_TIMESTAMP, progress_updated_at = ?
+       WHERE id = ? AND company_id = ?`,
+      [effectiveDate, new Date().toISOString(), billId, req.user.companyId]
+    );
+    await db.exec('COMMIT');
+    transactionOpen = false;
+    res.json({ message: 'Bill marked not supplied and carried forward until its outstanding quantity is resolved.', status: 'Not supplied', notSuppliedFromDate: effectiveDate });
+  } catch (error) {
+    if (transactionOpen) await db.exec('ROLLBACK');
+    console.error('Could not mark delivery not supplied:', error);
+    res.status(500).json({ error: 'Could not mark the delivery not supplied. Please try again.' });
+  }
+});
+
 app.post('/api/bills/reconcile', async (req, res) => {
   const { billId, items } = req.body;
   const db = req.app.locals.db;
@@ -1385,11 +1467,11 @@ app.post('/api/bills/reconcile', async (req, res) => {
     }
     const bill = req.user.role === 'delivery_partner'
       ? await db.get(
-        'SELECT id FROM bills WHERE id = ? AND company_id = ? AND assigned_to = ?',
+        'SELECT id, not_supplied_from_date FROM bills WHERE id = ? AND company_id = ? AND assigned_to = ?',
         [Number(billId), req.user.companyId, req.user.id]
       )
       : await db.get(
-        'SELECT id FROM bills WHERE id = ? AND company_id = ?',
+        'SELECT id, not_supplied_from_date FROM bills WHERE id = ? AND company_id = ?',
         [Number(billId), req.user.companyId]
       );
     if (!bill) {
@@ -1436,9 +1518,12 @@ app.post('/api/bills/reconcile', async (req, res) => {
     );
     const status = getBillStatus(totals);
     const progressUpdatedAt = new Date().toISOString();
+    const completed = status === 'Completed' || status === 'Returned';
+    const finalStatus = !completed && bill.not_supplied_from_date ? 'Not supplied' : status;
 
     await db.run(
       `UPDATE bills SET status = ?, updated_at = CURRENT_TIMESTAMP,
+         not_supplied_from_date = CASE WHEN ? THEN NULL ELSE not_supplied_from_date END,
          progress_started_at = COALESCE(progress_started_at, ?),
          progress_updated_at = ?,
          completed_at = CASE
@@ -1447,17 +1532,18 @@ app.post('/api/bills/reconcile', async (req, res) => {
          END
        WHERE id = ? AND company_id = ?`,
       [
-        status,
+        finalStatus,
+        completed ? 1 : 0,
         progressUpdatedAt,
         progressUpdatedAt,
-        status === 'Completed' || status === 'Returned' ? 1 : 0,
+        completed ? 1 : 0,
         progressUpdatedAt,
         Number(billId),
         req.user.companyId
       ]
     );
     await db.exec('COMMIT');
-    res.json({ message: 'Delivery progress saved.', status });
+    res.json({ message: 'Delivery progress saved.', status: finalStatus });
   } catch (err) {
     await db.exec('ROLLBACK');
     console.error('Could not reconcile delivery:', err);

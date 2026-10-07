@@ -164,6 +164,7 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .status-in-progress { color: #5078af; background: #edf3fb; }
 .status-completed { color: #34805a; background: #eaf5ee; }
 .status-returned { color: #8b668e; background: #f5eff6; }
+.status-not-supplied { color: #a45f28; background: #fff2e5; }
 .row-action { display: inline-flex; min-height: 29px; align-items: center; gap: 5px; padding: 0 8px; border: 1px solid #e7ebe8; border-radius: 5px; color: #4d6658; background: #fff; font-size: 9px; font-weight: 600; white-space: nowrap; }
 .row-action:hover { border-color: #bed4c7; color: #246745; background: #f4faf6; }
 .row-action svg { width: 12px; height: 12px; }
@@ -243,6 +244,12 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .reconcile-shortcut .button { min-height: 32px; padding: 0 9px; font-size: 9px; }
 .reconcile-shortcut .button.is-fully-delivered { border-color: #2f8a55; color: #fff; background: #328651; }
 .reconcile-shortcut .button.is-fully-delivered:hover { border-color: #277446; background: #277446; }
+.not-supplied-action { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: -7px 0 14px; padding: 10px 11px; border: 1px solid #f0e5d9; border-radius: 7px; background: #fffaf5; }
+.not-supplied-action > div { display: grid; gap: 3px; }
+.not-supplied-action strong { color: #77502e; font-size: 10px; font-weight: 600; }
+.not-supplied-action span { color: #927d67; font-size: 9px; line-height: 1.45; }
+.not-supplied-action .button { min-height: 32px; padding: 0 9px; border-color: #ead6c1; color: #875b31; font-size: 9px; }
+.not-supplied-action .button:disabled { cursor: not-allowed; opacity: .48; }
 .reconcile-list-heading, .reconcile-row { display: grid; grid-template-columns: minmax(95px, 1fr) 48px 68px 68px 68px 100px; align-items: center; gap: 7px; }
 .reconcile-list-heading { padding: 0 5px 9px; color: #8f9993; font-size: 8px; font-weight: 700; letter-spacing: .45px; }
 .reconcile-list-heading span:not(:first-child) { text-align: center; }
@@ -333,6 +340,8 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
   .export-button { gap: 4px; padding: 0 6px; font-size: 9px; }
   .reconcile-shortcut { align-items: flex-start; flex-direction: column; }
   .reconcile-shortcut .button { align-self: flex-start; }
+  .not-supplied-action { align-items: flex-start; flex-direction: column; }
+  .not-supplied-action .button { align-self: stretch; }
   .bulk-assignment { padding: 9px 12px; gap: 8px; }
   .bulk-partner-label { margin-left: 0; }
   .bulk-assignment .assignment-select { min-width: 130px; flex: 1; }

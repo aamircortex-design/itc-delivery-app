@@ -18,6 +18,7 @@ let currentUser = null;
 let selectedFile = null;
 let activeBill = null;
 let selectedSalesmanFilter = '';
+let hasInitializedDeliveryDate = false;
 const selectedBillIds = new Set();
 let toastTimeout;
 let selectedDeliveryDate = getLocalDateValue();
@@ -110,7 +111,13 @@ function getBillDeliveryDate(bill) {
 }
 
 function getSelectedDayDeliveries() {
-  return deliveries.filter(bill => getBillDeliveryDate(bill) === selectedDeliveryDate);
+  return deliveries.filter(bill => {
+    const isScheduledForDate = getBillDeliveryDate(bill) === selectedDeliveryDate;
+    const isCarryover = bill.status === 'Not supplied' &&
+      /^\d{4}-\d{2}-\d{2}$/.test(bill.not_supplied_from_date || '') &&
+      bill.not_supplied_from_date <= selectedDeliveryDate;
+    return isScheduledForDate || isCarryover;
+  });
 }
 
 function getQuantities(bill) {
@@ -130,6 +137,7 @@ function statusClass(status) {
   return {
     Pending: 'status-pending',
     'In progress': 'status-in-progress',
+    'Not supplied': 'status-not-supplied',
     Completed: 'status-completed',
     Returned: 'status-returned'
   }[status] || 'status-pending';
@@ -219,12 +227,16 @@ function renderRows() {
       bill.progress_updated_at ? `Updated ${formatDateTime(bill.progress_updated_at)}` : '',
       duration ? `${bill.completed_at ? 'Duration' : 'Elapsed'} ${duration}` : ''
     ].filter(Boolean);
+    const displayedDeliveryDate = bill.status === 'Not supplied' &&
+      bill.not_supplied_from_date < selectedDeliveryDate
+      ? `Carried from ${formatDate(bill.not_supplied_from_date)}`
+      : formatDate(bill.delivery_date || bill.created_at);
     const salesmanDetails = bill.salesman
       ? `<span class="outlet-salesman">Salesman: ${escapeHtml(bill.salesman)}</span>`
       : '';
     return `<tr>
       ${selectionCell}
-      <td data-label="Delivery"><div class="bill-cell"><span class="bill-number">#${escapeHtml(bill.bill_no)}</span><span class="bill-date">${escapeHtml(formatDate(bill.delivery_date || bill.created_at))}</span></div></td>
+      <td data-label="Delivery"><div class="bill-cell"><span class="bill-number">#${escapeHtml(bill.bill_no)}</span><span class="bill-date">${escapeHtml(displayedDeliveryDate)}</span></div></td>
       <td data-label="Outlet &amp; area"><div class="outlet-cell"><span class="outlet-name" title="${escapeHtml(bill.outlet_name)}">${escapeHtml(bill.outlet_name)}</span><span class="outlet-address" title="${escapeHtml(bill.address || 'No address listed')}">${escapeHtml(bill.address || 'No address listed')}</span>${salesmanDetails}</div></td>
       <td data-label="Items"><div class="item-summary">${itemPreview}${moreItems}${returnSummary}</div></td>
       <td class="progress-cell" data-label="Progress"><div class="progress-label"><span>${quantities.delivered.toLocaleString()} / ${quantities.total.toLocaleString()} delivered</span><strong>${percentage}%</strong></div><div class="progress-track" aria-label="${percentage}% resolved, ${escapeHtml(deliveryStatus)}"><div class="progress-bar" style="width:${percentage}%"></div></div><span class="progress-pending">${escapeHtml(deliveryStatus)}</span></td>
@@ -262,13 +274,23 @@ async function loadDeliveries() {
   }
   deliveries = result;
   const savedDate = localStorage.getItem('tafDistiDesk.selectedDeliveryDate');
-  if (/^\d{4}-\d{2}-\d{2}$/.test(savedDate || '')) {
+  const today = getLocalDateValue();
+  const hasActiveCarryover = deliveries.some(bill =>
+    bill.status === 'Not supplied' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(bill.not_supplied_from_date || '') &&
+    bill.not_supplied_from_date <= today
+  );
+  if (!hasInitializedDeliveryDate && hasActiveCarryover && /^\d{4}-\d{2}-\d{2}$/.test(savedDate || '') && savedDate < today) {
+    selectedDeliveryDate = today;
+  } else if (/^\d{4}-\d{2}-\d{2}$/.test(savedDate || '')) {
     selectedDeliveryDate = savedDate;
   } else {
-    const today = getLocalDateValue();
     const availableDates = deliveries.map(getBillDeliveryDate).filter(Boolean).sort();
-    selectedDeliveryDate = availableDates.filter(date => date <= today).pop() || today;
+    selectedDeliveryDate = hasActiveCarryover
+      ? today
+      : availableDates.filter(date => date <= today).pop() || today;
   }
+  hasInitializedDeliveryDate = true;
   document.querySelector('#dashboard-date').value = selectedDeliveryDate;
   renderRows();
 }
@@ -580,6 +602,11 @@ async function uploadFile() {
 function openReconcileDialog(bill) {
   activeBill = bill;
   document.querySelector('#reconcile-subtitle').textContent = `Bill #${bill.bill_no} · ${bill.outlet_name}`;
+  document.querySelector('#mark-not-supplied').hidden = currentUser?.role === 'manager';
+  document.querySelector('#not-supplied-note').textContent = bill.status === 'Not supplied'
+    ? `This bill is carried forward from ${formatDate(bill.not_supplied_from_date)} until its outstanding quantity is resolved.`
+    : 'The remaining quantity will stay on the dashboard for this date and carry forward on later dates until supplied.';
+  document.querySelector('#not-supplied-error').hidden = true;
   document.querySelector('#reconcile-items').innerHTML = bill.items.map(item => `
     <div class="reconcile-row" data-item-row="${item.id}">
       <span class="reconcile-item-name" title="${escapeHtml(item.item_name)}">${escapeHtml(item.item_name)}</span>
@@ -592,7 +619,53 @@ function openReconcileDialog(bill) {
   `).join('');
   document.querySelector('#reconcile-error').hidden = true;
   updateDeliveryShortcutStates();
+  updateNotSuppliedAction();
   reconcileDialog.showModal();
+}
+
+function updateNotSuppliedAction() {
+  const button = document.querySelector('#mark-not-supplied');
+  if (!activeBill || button.hidden) return;
+
+  const hasUnsavedChanges = activeBill.items.some(item =>
+    Number(reconcileForm.elements.namedItem(`delivered-${item.id}`).value) !== Number(item.qty_delivered) ||
+    Number(reconcileForm.elements.namedItem(`returned-${item.id}`).value) !== Number(item.qty_returned) ||
+    String(reconcileForm.elements.namedItem(`return-type-${item.id}`).value || '') !== String(item.return_type || '')
+  );
+  const remaining = activeBill.items.reduce((total, item) => {
+    const delivered = Number(reconcileForm.elements.namedItem(`delivered-${item.id}`).value);
+    const returned = Number(reconcileForm.elements.namedItem(`returned-${item.id}`).value);
+    return total + Math.max(0, Number(item.qty_ordered) - delivered - returned);
+  }, 0);
+  button.disabled = remaining === 0 || hasUnsavedChanges;
+  button.title = hasUnsavedChanges
+    ? 'Save or discard your quantity edits before marking this bill not supplied.'
+    : remaining === 0
+      ? 'There is no outstanding quantity to carry forward.'
+      : 'Keep this bill on the dashboard for subsequent dates until its remaining quantity is resolved.';
+}
+
+async function markBillNotSupplied() {
+  if (!activeBill) return;
+  const button = document.querySelector('#mark-not-supplied');
+  button.disabled = true;
+  document.querySelector('#not-supplied-error').hidden = true;
+  try {
+    const result = await requestJson('/api/bills/not-supplied', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ billId: activeBill.id, deliveryDate: selectedDeliveryDate })
+    });
+    reconcileDialog.close();
+    await loadDeliveries();
+    showToast(result.message);
+  } catch (error) {
+    const errorElement = document.querySelector('#not-supplied-error');
+    errorElement.textContent = error.message;
+    errorElement.hidden = false;
+  } finally {
+    updateNotSuppliedAction();
+  }
 }
 
 function updateDeliveryShortcutStates() {
@@ -874,12 +947,19 @@ document.querySelector('#select-salesman-outlets').addEventListener('click', sel
 document.querySelector('#assign-selected-bills').addEventListener('click', assignSelectedBills);
 document.querySelector('#cancel-reconcile').addEventListener('click', () => reconcileDialog.close());
 document.querySelector('#fill-bill-delivered').addEventListener('click', fillBillAsFullyDelivered);
+document.querySelector('#mark-not-supplied').addEventListener('click', markBillNotSupplied);
 document.querySelector('#reconcile-items').addEventListener('click', event => {
   const button = event.target.closest('[data-fully-delivered]');
   if (button) fillItemAsFullyDelivered(button.dataset.fullyDelivered);
 });
-reconcileForm.addEventListener('input', updateDeliveryShortcutStates);
-reconcileForm.addEventListener('change', updateDeliveryShortcutStates);
+reconcileForm.addEventListener('input', () => {
+  updateDeliveryShortcutStates();
+  updateNotSuppliedAction();
+});
+reconcileForm.addEventListener('change', () => {
+  updateDeliveryShortcutStates();
+  updateNotSuppliedAction();
+});
 reconcileForm.addEventListener('submit', saveReconciliation);
 dropzone.addEventListener('click', () => fileInput.click());
 dropzone.addEventListener('keydown', event => {

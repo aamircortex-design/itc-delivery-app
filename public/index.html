@@ -141,6 +141,7 @@
                     <option value="All">All status</option>
                     <option value="Pending">Pending</option>
                     <option value="In progress">In progress</option>
+                    <option value="Not supplied">Not supplied</option>
                     <option value="Completed">Completed</option>
                     <option value="Returned">Returned</option>
                   </select>
@@ -224,8 +225,16 @@
           </div>
           <button class="button button-secondary" id="fill-bill-delivered" type="button">Mark bill fully delivered</button>
         </div>
+        <div class="not-supplied-action" id="not-supplied-action">
+          <div>
+            <strong>Unable to supply the remaining items?</strong>
+            <span id="not-supplied-note">Carry this bill forward until its outstanding quantity is resolved.</span>
+          </div>
+          <button class="button button-secondary" id="mark-not-supplied" type="button">Mark not supplied</button>
+        </div>
         <div class="reconcile-list-heading"><span>ITEM</span><span>ORDERED</span><span>DELIVERED</span><span>RETURNED</span><span>RETURN TYPE</span><span></span></div>
         <div id="reconcile-items" class="reconcile-items"></div>
+        <div class="dialog-error" id="not-supplied-error" role="alert" hidden></div>
         <div class="dialog-error" id="reconcile-error" role="alert" hidden></div>
         <div class="modal-actions">
           <button class="button button-secondary" id="cancel-reconcile" type="button">Cancel</button>
