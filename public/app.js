@@ -548,6 +548,9 @@ async function uploadFile() {
     if (result.salesReturnsSkipped) {
       skippedNotes.push(`${result.salesReturnsSkipped} sales-return lines skipped.`);
     }
+    if (result.salesmanMappingsUpdated) {
+      skippedNotes.push(`Updated salesman names on ${result.salesmanMappingsUpdated} already-imported bills without changing their delivery progress.`);
+    }
     const duplicateUploadOnly = result.billsImported === 0 && result.duplicateBillsSkipped > 0;
     const importSummary = duplicateUploadOnly
       ? `All ${result.duplicateBillsSkipped} bills were already imported for ${formatDate(result.deliveryDate)}. No duplicate bills added.`

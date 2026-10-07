@@ -1107,6 +1107,7 @@ app.post('/api/bills/upload', upload.single('file'), async (req, res) => {
     const billIdByNumber = new Map();
     const duplicateBillNumbers = new Set();
     let billsImported = 0;
+    let salesmanMappingsUpdated = 0;
     let rowsImported = 0;
 
     for (const row of aggregatedRows.values()) {
@@ -1121,6 +1122,14 @@ app.post('/api/bills/upload', upload.single('file'), async (req, res) => {
 
       if (bill && bill.delivery_date === selectedDate) {
         duplicateBillNumbers.add(row.billno);
+        if (row.salesman) {
+          await req.app.locals.db.run(
+            `UPDATE bills SET salesman = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ? AND company_id = ? AND delivery_date = ?`,
+            [row.salesman, bill.id, req.user.companyId, selectedDate]
+          );
+          salesmanMappingsUpdated += 1;
+        }
         continue;
       }
 
@@ -1192,6 +1201,7 @@ app.post('/api/bills/upload', upload.single('file'), async (req, res) => {
       rowsImported,
       billsImported,
       duplicateBillsSkipped: duplicateBillNumbers.size,
+      salesmanMappingsUpdated,
       deliveryDate: selectedDate,
       salesReturnsSkipped,
       otherDatesSkipped
