@@ -177,14 +177,19 @@ function updateSummary() {
 function visibleDeliveries() {
   const query = document.querySelector('#search-input').value.trim().toLowerCase();
   const status = document.querySelector('#status-filter').value;
+  const deliveryAgent = document.querySelector('#delivery-agent-filter').value;
   return getSelectedDayDeliveries().filter(bill => {
     const matchesStatus = status === 'All' || bill.status === status;
+    const matchesDeliveryAgent = !deliveryAgent ||
+      (deliveryAgent === 'unassigned'
+        ? !bill.assigned_to
+        : String(bill.assigned_to || '') === deliveryAgent);
     const matchesSalesman = !selectedSalesmanFilter ||
       String(bill.salesman || '').trim().toLocaleLowerCase() === selectedSalesmanFilter.toLocaleLowerCase();
-    const searchable = [bill.bill_no, bill.outlet_name, bill.address, ...bill.items.map(item => item.item_name)]
+    const searchable = [bill.bill_no, bill.outlet_name, bill.address, bill.assigned_partner_name, ...bill.items.map(item => item.item_name)]
       .join(' ')
       .toLowerCase();
-    return matchesSalesman && matchesStatus && (!query || searchable.includes(query));
+    return matchesDeliveryAgent && matchesSalesman && matchesStatus && (!query || searchable.includes(query));
   });
 }
 
@@ -244,7 +249,7 @@ function renderRows() {
     const salesmanDetails = bill.salesman
       ? `<span class="outlet-salesman">Salesman: ${escapeHtml(bill.salesman)}</span>`
       : '';
-    return `<tr>
+    return `<tr class="${bill.status === 'Completed' ? 'delivery-row-completed' : ''}">
       ${selectionCell}
       <td data-label="Delivery"><div class="bill-cell"><span class="bill-number">#${escapeHtml(bill.bill_no)}</span><span class="bill-date">${escapeHtml(displayedDeliveryDate)}</span></div></td>
       <td data-label="Outlet &amp; area"><div class="outlet-cell"><span class="outlet-name" title="${escapeHtml(bill.outlet_name)}">${escapeHtml(bill.outlet_name)}</span><span class="outlet-address" title="${escapeHtml(bill.address || 'No address listed')}">${escapeHtml(bill.address || 'No address listed')}</span>${salesmanDetails}</div></td>
@@ -270,7 +275,7 @@ function renderRows() {
         : currentUser?.role === 'delivery_partner'
           ? 'Your manager will assign deliveries to your account.'
           : 'Import an Excel or CSV file to start tracking your orders.'
-      : 'Try another search or status filter.';
+      : 'Try another search, status, or delivery agent filter.';
     document.querySelector('#empty-upload').hidden = currentUser?.role === 'delivery_partner' || !noData || hasAnyDeliveries;
   }
 
@@ -331,6 +336,7 @@ async function loadCurrentUser() {
   document.querySelector('#modal-template').hidden = user.role === 'delivery_partner';
   exportButton.hidden = user.role === 'delivery_partner';
   document.querySelector('#assigned-header').hidden = !['admin', 'manager'].includes(user.role);
+  document.querySelector('#delivery-agent-filter-control').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#bulk-assignment').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#bulk-select-header').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#delivery-heading').textContent = user.role === 'delivery_partner' ? 'My assigned deliveries' : 'All deliveries';
@@ -362,6 +368,9 @@ async function loadDeliveryPartners() {
   if (!['admin', 'manager'].includes(currentUser?.role)) return;
   deliveryPartners = await requestJson('/api/delivery-partners');
   document.querySelector('#bulk-partner-select').innerHTML = '<option value="">Choose a delivery partner</option>' +
+    deliveryPartners.map(partner => `<option value="${partner.id}">${escapeHtml(partner.fullName)}</option>`).join('');
+  document.querySelector('#delivery-agent-filter').innerHTML =
+    '<option value="">All delivery agents</option><option value="unassigned">Unassigned</option>' +
     deliveryPartners.map(partner => `<option value="${partner.id}">${escapeHtml(partner.fullName)}</option>`).join('');
 }
 
@@ -1154,6 +1163,7 @@ document.querySelector('#download-template').addEventListener('click', downloadT
 document.querySelector('#modal-template').addEventListener('click', downloadTemplate);
 document.querySelector('#search-input').addEventListener('input', renderRows);
 document.querySelector('#status-filter').addEventListener('change', renderRows);
+document.querySelector('#delivery-agent-filter').addEventListener('change', renderRows);
 document.querySelector('#delivery-rows').addEventListener('click', event => {
   const button = event.target.closest('[data-reconcile]');
   if (!button) return;

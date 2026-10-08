@@ -128,6 +128,7 @@ h1 span { color: #7f8984; font-weight: 500; }
 .filter-select { position: relative; display: flex; height: 34px; align-items: center; gap: 6px; padding: 0 25px 0 9px; border: 1px solid #e7ebe8; border-radius: 6px; color: #68736d; }
 .filter-select > svg:first-of-type { width: 14px; height: 14px; }
 .filter-select select { max-width: 97px; appearance: none; border: 0; outline: 0; color: #606d66; background: transparent; font-size: 10px; cursor: pointer; }
+.delivery-agent-filter select { max-width: 145px; }
 .filter-select .select-chevron { position: absolute; right: 7px; width: 13px; height: 13px; pointer-events: none; }
 .assignment-select { max-width: 145px; min-height: 31px; padding: 0 8px; border: 1px solid #e4eae6; border-radius: 5px; color: #526158; background: #fff; font-size: 10px; }
 .assignment-select:disabled { cursor: wait; opacity: .6; }
@@ -163,6 +164,8 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .status-pending { color: #a2782d; background: #fbf5e8; }
 .status-in-progress { color: #5078af; background: #edf3fb; }
 .status-completed { color: #34805a; background: #eaf5ee; }
+.delivery-row-completed td { background: #f0f8f2; }
+.delivery-row-completed .status-completed { color: #216b43; background: #dcefe2; }
 .status-returned { color: #8b668e; background: #f5eff6; }
 .status-not-supplied { color: #a45f28; background: #fff2e5; }
 .row-action { display: inline-flex; min-height: 29px; align-items: center; gap: 5px; padding: 0 8px; border: 1px solid #e7ebe8; border-radius: 5px; color: #4d6658; background: #fff; font-size: 9px; font-weight: 600; white-space: nowrap; }
@@ -337,9 +340,10 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
   .stat-card { min-height: 110px; padding: 13px; }
   .stat-value { font-size: 24px; }
   .panel-heading { align-items: flex-start; flex-direction: column; gap: 13px; padding: 15px; }
-  .table-controls { width: 100%; }
-  .search-box { width: auto; flex: 1; }
+  .table-controls { width: 100%; flex-wrap: wrap; }
+  .search-box { width: auto; flex: 1 1 100%; }
   .filter-select { flex: 0 0 auto; }
+  .delivery-agent-filter select { max-width: 150px; }
   .table-scroll { overflow: visible; padding: 0 10px 10px; }
   table { display: block; width: 100%; min-width: 0; }
   thead { display: none; }

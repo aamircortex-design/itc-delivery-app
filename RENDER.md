@@ -65,6 +65,8 @@ implicit TLS; other ports use the normal SMTP connection with Nodemailer authent
 Delivery agents can submit an RT number and damaged-stock photo from the dashboard.
 Reports are permanent and cannot be deleted through the app. They are shown to the
 whole workspace, including managers, filtered by the dashboard's selected date.
+Admins and managers can filter the delivery list by assigned delivery agent;
+completed deliveries are highlighted green.
 The daily delivery Excel export includes the assigned delivery partner and each
 returned item's return reason.
 
