@@ -130,6 +130,14 @@ function getSelectedDayDeliveries() {
   });
 }
 
+function getDeliveryAgentDeliveries(dayDeliveries = getSelectedDayDeliveries()) {
+  const deliveryAgent = document.querySelector('#delivery-agent-filter').value;
+  if (!deliveryAgent) return dayDeliveries;
+  return dayDeliveries.filter(bill => deliveryAgent === 'unassigned'
+    ? !bill.assigned_to
+    : String(bill.assigned_to || '') === deliveryAgent);
+}
+
 function getQuantities(bill) {
   const total = bill.items.reduce((sum, item) => sum + Number(item.qty_ordered), 0);
   const delivered = bill.items.reduce((sum, item) => sum + Number(item.qty_delivered), 0);
@@ -154,7 +162,8 @@ function statusClass(status) {
 }
 
 function updateSummary() {
-  const dayDeliveries = getSelectedDayDeliveries();
+  const allDayDeliveries = getSelectedDayDeliveries();
+  const dayDeliveries = getDeliveryAgentDeliveries(allDayDeliveries);
   const count = { Pending: 0, 'In progress': 0, Completed: 0, Returned: 0 };
   dayDeliveries.forEach(bill => {
     count[bill.status] = (count[bill.status] || 0) + 1;
@@ -162,8 +171,8 @@ function updateSummary() {
 
   const pendingBills = dayDeliveries.filter(bill => getQuantities(bill).remaining > 0).length;
   const pendingUnits = dayDeliveries.reduce((sum, bill) => sum + getQuantities(bill).remaining, 0);
-  exportButton.disabled = dayDeliveries.length === 0;
-  exportButton.title = dayDeliveries.length
+  exportButton.disabled = allDayDeliveries.length === 0;
+  exportButton.title = allDayDeliveries.length
     ? `Download the ${formatDate(selectedDeliveryDate)} delivery report as an Excel workbook`
     : `No deliveries to export for ${formatDate(selectedDeliveryDate)}`;
   document.querySelector('#total-count').textContent = dayDeliveries.length.toLocaleString();
@@ -171,25 +180,20 @@ function updateSummary() {
   document.querySelector('#pending-unit-copy').textContent = `${pendingUnits.toLocaleString()} ${pendingUnits === 1 ? 'unit' : 'units'} still to deliver`;
   document.querySelector('#progress-count').textContent = (count['In progress'] || 0).toLocaleString();
   document.querySelector('#completed-count').textContent = ((count.Completed || 0) + (count.Returned || 0)).toLocaleString();
-  document.querySelector('#nav-count').textContent = dayDeliveries.length > 99 ? '99+' : String(dayDeliveries.length);
+  document.querySelector('#nav-count').textContent = allDayDeliveries.length > 99 ? '99+' : String(allDayDeliveries.length);
 }
 
 function visibleDeliveries() {
   const query = document.querySelector('#search-input').value.trim().toLowerCase();
   const status = document.querySelector('#status-filter').value;
-  const deliveryAgent = document.querySelector('#delivery-agent-filter').value;
-  return getSelectedDayDeliveries().filter(bill => {
+  return getDeliveryAgentDeliveries().filter(bill => {
     const matchesStatus = status === 'All' || bill.status === status;
-    const matchesDeliveryAgent = !deliveryAgent ||
-      (deliveryAgent === 'unassigned'
-        ? !bill.assigned_to
-        : String(bill.assigned_to || '') === deliveryAgent);
     const matchesSalesman = !selectedSalesmanFilter ||
       String(bill.salesman || '').trim().toLocaleLowerCase() === selectedSalesmanFilter.toLocaleLowerCase();
     const searchable = [bill.bill_no, bill.outlet_name, bill.address, bill.assigned_partner_name, ...bill.items.map(item => item.item_name)]
       .join(' ')
       .toLowerCase();
-    return matchesDeliveryAgent && matchesSalesman && matchesStatus && (!query || searchable.includes(query));
+    return matchesSalesman && matchesStatus && (!query || searchable.includes(query));
   });
 }
 
