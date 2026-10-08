@@ -884,6 +884,11 @@ function formatSalesDate(isoDate) {
   }).format(new Date(`${isoDate}T00:00:00Z`));
 }
 
+function roundCurrencyAmount(value) {
+  const sign = Math.sign(value);
+  return sign * Math.round((Math.abs(value) + 1e-9) * 100) / 100;
+}
+
 function xmlEscape(value) {
   return String(value ?? '')
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
@@ -1385,6 +1390,12 @@ app.post('/api/profitability/product-costs', upload.single('file'), async (req, 
           rowNumber
         );
         if (purchaseUnitCost < 0) throw new Error(`Row ${rowNumber} in worksheet "${sheetName}" has a negative purchase price.`);
+        if (headerIndexes.gstRate !== -1) {
+          inputGstRate = parseAmount(sourceRow[headerIndexes.gstRate], 'GST percentage', rowNumber);
+          if (inputGstRate < 0 || inputGstRate > 100) {
+            throw new Error(`Row ${rowNumber} in worksheet "${sheetName}" has an invalid GST percentage.`);
+          }
+        }
       }
       const itemName = String(sourceRow[headerIndexes.itemName] ?? '').trim() || itemCode;
       const product = { itemCode, itemName, purchaseUnitCost, inputGstRate, purchaseDate, invoiceRef };
@@ -1592,7 +1603,7 @@ app.get('/api/profitability/report', async (req, res) => {
         itemName: item.itemName,
         purchaseCost: complete ? item.cogs : null,
         netSellingCost: item.grossAmount,
-        gstPayable: complete ? item.outputTax - item.inputGst : null,
+        gstPayable: complete ? roundCurrencyAmount(item.outputTax - item.inputGst) : null,
         netMarginBeforeRfa: complete && purchaseCostWithGst !== 0
           ? netProfitWithoutRfa / purchaseCostWithGst * 100
           : null,
@@ -1627,7 +1638,7 @@ app.get('/api/profitability/report', async (req, res) => {
         netProfitWithRfa: profitabilityIncomplete ? null : grossAmount + rfaAmount - cogs,
         outputTax,
         inputGst: profitabilityIncomplete ? null : inputGst,
-        gstPayable: profitabilityIncomplete ? null : outputTax - inputGst,
+        gstPayable: profitabilityIncomplete ? null : roundCurrencyAmount(outputTax - inputGst),
         missingCostItems,
         missingQuantityItems
       },

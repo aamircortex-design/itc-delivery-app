@@ -92,14 +92,15 @@ pre-tax per-piece cost as
 `Original PTS × (1 − Inv Disc% / 100)` and applies combined SGST/CGST (or IGST) to
 calculate the GST-inclusive purchase price. The pre-tax cost and GST rate are
 stored separately for profitability and input-GST estimates. The
-importer also accepts `Item Code`, `Item Name`, `GST Percentage`, and `Net Price
+importer also accepts pre-tax `Purchase Unit Cost` with an optional
+`GST Percentage`, or `Item Code`, `Item Name`, `GST Percentage`, and `Net Price
 per PC Including GST` by removing GST from the inclusive price. New SKUs are
 added, existing SKUs are updated, and SKUs absent from an upload are left
 unchanged. Each SKU should occur once per file. The simpler `SKU` plus pre-tax
 `Purchase Price` file format is also accepted; when that format updates an
 existing SKU, its GST rate is preserved, while a new SKU defaults to 0% input
-GST. To manage costs directly in the database instead, load one cost row per
-product into
+GST if no GST Percentage is supplied. To manage costs directly in the database
+instead, load one cost row per product into
 `profitability_product_costs`, scoped to its workspace:
 
 - `company_id`: the workspace ID from `companies`.
@@ -146,6 +147,7 @@ The Net RFA Due from Company tab has independent From and To date filters. It
 groups `Total Discount` as net RFA by product category across the selected
 inclusive period and displays the period total. Negative discounts on sales
 returns reduce the RFA due. The shared profitability report date remains
-dedicated to SKU profitability and the sales-register upload.
+dedicated to SKU profitability and the sales-register upload. GST payable is
+output GST less estimated input GST and is rounded to the nearest paise.
 Both the selected-day SKU report and the selected-period Net RFA report can be
 exported as Excel workbooks from their respective tabs.
