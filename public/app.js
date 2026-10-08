@@ -725,6 +725,39 @@ async function exportSelectedDay() {
   }
 }
 
+async function downloadExcelReport(endpoint, filename, button) {
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Preparing...';
+  try {
+    const response = await fetch(endpoint);
+    if (!response.ok) {
+      let body;
+      try {
+        body = await response.json();
+      } catch {
+        throw new Error(`Could not download the Excel report (${response.status}).`);
+      }
+      throw new Error(body.error || `Could not download the Excel report (${response.status}).`);
+    }
+    const workbook = await response.blob();
+    const url = URL.createObjectURL(workbook);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast(`Downloaded ${filename}.`);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
+
 function openUploadDialog() {
   selectedFile = null;
   fileInput.value = '';
@@ -1237,6 +1270,32 @@ document.querySelector('#profitability-sku-tab-button').addEventListener('click'
 document.querySelector('#profitability-rfa-tab-button').addEventListener('click', () => showProfitabilityTab('rfa'));
 document.querySelector('#rfa-from-date').addEventListener('change', loadRfaReport);
 document.querySelector('#rfa-to-date').addEventListener('change', loadRfaReport);
+document.querySelector('#export-profitability').addEventListener('click', () => {
+  const selectedDate = document.querySelector('#profit-date').value;
+  if (!selectedDate) {
+    showToast('Choose a profitability report date before exporting.', true);
+    return;
+  }
+  downloadExcelReport(
+    `/api/profitability/report?date=${encodeURIComponent(selectedDate)}&format=xlsx`,
+    `SKU-Profitability-${selectedDate}.xlsx`,
+    document.querySelector('#export-profitability')
+  );
+});
+document.querySelector('#export-rfa-report').addEventListener('click', () => {
+  const fromDate = document.querySelector('#rfa-from-date').value;
+  const toDate = document.querySelector('#rfa-to-date').value;
+  if (!fromDate || !toDate || fromDate > toDate) {
+    showToast('Choose a valid from and to date before exporting the RFA report.', true);
+    return;
+  }
+  const query = new URLSearchParams({ fromDate, toDate, format: 'xlsx' });
+  downloadExcelReport(
+    `/api/profitability/rfa-report?${query}`,
+    `Net-RFA-${fromDate}-to-${toDate}.xlsx`,
+    document.querySelector('#export-rfa-report')
+  );
+});
 exportButton.addEventListener('click', exportSelectedDay);
 async function initializeDashboard() {
   await loadCurrentUser();

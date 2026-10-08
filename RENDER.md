@@ -65,6 +65,8 @@ implicit TLS; other ports use the normal SMTP connection with Nodemailer authent
 Delivery agents can submit an RT number and damaged-stock photo from the dashboard.
 Reports are permanent and cannot be deleted through the app. They are shown to the
 whole workspace, including managers, filtered by the dashboard's selected date.
+The daily delivery Excel export includes the assigned delivery partner and each
+returned item's return reason.
 
 ## Admin profitability report
 
@@ -145,3 +147,5 @@ groups `Total Discount` as net RFA by product category across the selected
 inclusive period and displays the period total. Negative discounts on sales
 returns reduce the RFA due. The shared profitability report date remains
 dedicated to SKU profitability and the sales-register upload.
+Both the selected-day SKU report and the selected-period Net RFA report can be
+exported as Excel workbooks from their respective tabs.

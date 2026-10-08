@@ -193,6 +193,7 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .profitability-tab:hover { color: #2e6848; background: #f7faf8; }
 .profitability-tab.active { border-bottom-color: #37865b; color: #2e6848; background: #f4f8f5; }
 .profitability-panel { overflow: hidden; border: 1px solid #e8ece9; border-radius: 9px; background: #fff; }
+.profitability-export-actions { display: flex; justify-content: flex-end; padding: 12px 18px 0; }
 .profitability-controls { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 17px; padding: 15px 18px; border: 1px solid #e8ece9; border-radius: 9px; background: #fff; }
 .profitability-controls .date-field { width: 190px; margin: 0; }
 .profitability-date-help { align-self: center; padding-top: 13px; color: #7e8983; font-size: 10px; }
@@ -377,6 +378,8 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
   .profitability-controls { align-items: stretch; flex-direction: column; padding: 13px; }
   .profitability-controls .date-field { width: 100%; }
   .profitability-controls .button { width: 100%; }
+  .profitability-export-actions { padding: 10px 11px 0; }
+  .profitability-export-actions .button { width: 100%; }
   .profitability-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; padding: 11px; }
   .profitability-summary-card { min-height: 72px; padding: 9px; }
   .profitability-summary-card strong { font-size: 12px; }

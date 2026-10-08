@@ -937,15 +937,27 @@ function createWorksheet(rows, { autoFilterRow } = {}) {
     </worksheet>`;
 }
 
-function createDeliveryWorkbook(summaryRows, itemRows) {
+function createWorkbook(sheets) {
+  const sheetOverrides = sheets.map((_, index) =>
+    `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`
+  ).join('');
+  const workbookSheets = sheets.map((sheet, index) =>
+    `<sheet name="${xmlEscape(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`
+  ).join('');
+  const workbookRelationships = sheets.map((_, index) =>
+    `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`
+  ).join('');
+  const worksheetFiles = Object.fromEntries(sheets.map((sheet, index) => [
+    `xl/worksheets/sheet${index + 1}.xml`,
+    createWorksheet(sheet.rows, { autoFilterRow: sheet.autoFilterRow })
+  ]));
   const files = {
     '[Content_Types].xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
       <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
         <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
         <Default Extension="xml" ContentType="application/xml"/>
         <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-        <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-        <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+        ${sheetOverrides}
       </Types>`,
     '_rels/.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
       <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -953,23 +965,25 @@ function createDeliveryWorkbook(summaryRows, itemRows) {
       </Relationships>`,
     'xl/workbook.xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
       <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-        <sheets>
-          <sheet name="Daily Summary" sheetId="1" r:id="rId1"/>
-          <sheet name="Delivery Items" sheetId="2" r:id="rId2"/>
-        </sheets>
+        <sheets>${workbookSheets}</sheets>
       </workbook>`,
     'xl/_rels/workbook.xml.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
       <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-        <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-        <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+        ${workbookRelationships}
       </Relationships>`,
-    'xl/worksheets/sheet1.xml': createWorksheet(summaryRows, { autoFilterRow: 14 }),
-    'xl/worksheets/sheet2.xml': createWorksheet(itemRows, { autoFilterRow: 1 })
+    ...worksheetFiles
   };
 
   return zipSync(Object.fromEntries(
     Object.entries(files).map(([name, contents]) => [name, strToU8(contents)])
   ));
+}
+
+function createDeliveryWorkbook(summaryRows, itemRows) {
+  return createWorkbook([
+    { name: 'Daily Summary', rows: summaryRows, autoFilterRow: 14 },
+    { name: 'Delivery Items', rows: itemRows, autoFilterRow: 1 }
+  ]);
 }
 
 function getBillStatus(totals) {
@@ -1601,7 +1615,7 @@ app.get('/api/profitability/report', async (req, res) => {
       netProfitWithoutRfa: bill.missingCostItems.length ? null : bill.grossAmount - bill.cogs,
       netProfitWithRfa: bill.missingCostItems.length ? null : bill.grossAmount + bill.rfaAmount - bill.cogs
     }));
-    res.json({
+    const report = {
       salesDate: selectedDate,
       excludedItems: [...new Set(excludedSales.map(sale => sale.item_name || sale.item_code))],
       summary: {
@@ -1619,7 +1633,62 @@ app.get('/api/profitability/report', async (req, res) => {
       },
       bills,
       items
-    });
+    };
+    if (req.query.format === 'xlsx') {
+      const summaryRows = [
+        ['SKU Profitability Report'],
+        ['Sales Date', selectedDate],
+        [],
+        ['Metric', 'Value'],
+        ['Bill Count', report.summary.billCount],
+        ['Gross Sales · Pre-tax', report.summary.grossAmount],
+        ['Net Purchase Cost · Pre-tax', report.summary.cogs ?? 'Incomplete'],
+        ['Net Profit · Before RFA', report.summary.netProfitWithoutRfa ?? 'Incomplete'],
+        ['Net Profit · After RFA', report.summary.netProfitWithRfa ?? 'Incomplete'],
+        ['RFA Amount', report.summary.rfaAmount],
+        ['Output GST', report.summary.outputTax],
+        ['Estimated Input GST', report.summary.inputGst ?? 'Incomplete'],
+        ['GST Payable', report.summary.gstPayable ?? 'Incomplete'],
+        ['Excluded Items', report.excludedItems.join(', ')],
+        ['Missing Purchase Costs', report.summary.missingCostItems.join(', ')],
+        ['Missing Quantities', report.summary.missingQuantityItems.join(', ')]
+      ];
+      const itemRows = [[
+        'Bill Number',
+        'SKU Code',
+        'SKU Name',
+        'Net Purchase Cost · Pre-tax',
+        'Net Selling Cost · Pre-tax',
+        'GST Payable',
+        'Net Margin Before RFA (%)',
+        'RFA Amount',
+        'Net Margin After RFA (%)',
+        'Status'
+      ], ...items.map(item => [
+        item.billNo,
+        item.itemCode,
+        item.itemName,
+        item.purchaseCost,
+        item.netSellingCost,
+        item.gstPayable,
+        item.netMarginBeforeRfa,
+        item.rfaAmount,
+        item.netMarginAfterRfa,
+        item.missingQuantity ? 'Quantity unavailable' : item.missingCost ? 'Purchase cost missing' : ''
+      ])];
+      const workbook = createWorkbook([
+        { name: 'Report Summary', rows: summaryRows },
+        { name: 'SKU Profitability', rows: itemRows, autoFilterRow: 1 }
+      ]);
+      res.set({
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': `attachment; filename="SKU-Profitability-${selectedDate}.xlsx"`,
+        'Content-Length': workbook.length,
+        'Cache-Control': 'no-store'
+      });
+      return res.send(Buffer.from(workbook));
+    }
+    res.json(report);
   } catch (error) {
     console.error('Could not create profitability report:', error);
     res.status(500).json({ error: 'Could not create the profitability report. Please try again.' });
@@ -1650,12 +1719,35 @@ app.get('/api/profitability/rfa-report', async (req, res) => {
        ORDER BY category COLLATE NOCASE`,
       [req.user.companyId, fromDate, toDate]
     );
-    res.json({
+    const report = {
       fromDate,
       toDate,
       totalNetRfa: rows.reduce((total, row) => total + Number(row.netRfa), 0),
       rows
-    });
+    };
+    if (req.query.format === 'xlsx') {
+      const workbook = createWorkbook([{
+        name: 'Net RFA by Category',
+        rows: [
+          ['Net RFA Due from Company'],
+          ['From Date', fromDate],
+          ['To Date', toDate],
+          ['Total Net RFA', report.totalNetRfa],
+          [],
+          ['Category', 'Net RFA Due'],
+          ...rows.map(row => [row.category, Number(row.netRfa)])
+        ],
+        autoFilterRow: 6
+      }]);
+      res.set({
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': `attachment; filename="Net-RFA-${fromDate}-to-${toDate}.xlsx"`,
+        'Content-Length': workbook.length,
+        'Cache-Control': 'no-store'
+      });
+      return res.send(Buffer.from(workbook));
+    }
+    res.json(report);
   } catch (error) {
     console.error('Could not create RFA report:', error);
     res.status(500).json({ error: 'Could not create the RFA report. Please try again.' });
@@ -1889,13 +1981,15 @@ app.get('/api/bills/export', async (req, res) => {
   try {
     const db = req.app.locals.db;
     const bills = await db.all(
-      `SELECT * FROM bills
-       WHERE company_id = ? AND (
-         delivery_date = ?
-         OR (delivery_date = '' AND substr(created_at, 1, 10) = ?)
-         OR (status = 'Not supplied' AND not_supplied_from_date <= ?)
+      `SELECT bills.*, users.full_name AS assigned_partner_name
+       FROM bills
+       LEFT JOIN users ON users.id = bills.assigned_to
+       WHERE bills.company_id = ? AND (
+         bills.delivery_date = ?
+         OR (bills.delivery_date = '' AND substr(bills.created_at, 1, 10) = ?)
+         OR (bills.status = 'Not supplied' AND bills.not_supplied_from_date <= ?)
        )
-       ORDER BY bill_no`,
+       ORDER BY bills.bill_no`,
       [req.user.companyId, selectedDate, selectedDate, selectedDate]
     );
 
@@ -1918,12 +2012,14 @@ app.get('/api/bills/export', async (req, res) => {
     const itemRows = [[
       'Sales Date',
       'Bill Number',
+      'Delivery Partner',
       'Outlet',
       'Delivery Area / Address',
       'Item',
       'Quantity Ordered',
       'Quantity Delivered',
       'Quantity Returned',
+      'Return Reason',
       'Quantity Pending',
       'Bill Status'
     ]];
@@ -1944,6 +2040,9 @@ app.get('/api/bills/export', async (req, res) => {
       const status = bill.status === 'Not supplied' && remaining > 0
         ? 'Not supplied'
         : getBillStatus(quantities);
+      const returnReasons = [...new Set(items
+        .filter(item => Number(item.qty_returned) > 0 && item.return_type)
+        .map(item => item.return_type))].join(', ');
 
       orderedUnits += quantities.ordered;
       deliveredUnits += quantities.delivered;
@@ -1954,9 +2053,11 @@ app.get('/api/bills/export', async (req, res) => {
 
       billSummaries.push([
         bill.bill_no,
+        bill.assigned_partner_name || '',
         bill.outlet_name,
         bill.address,
         status,
+        returnReasons,
         items.length,
         quantities.ordered,
         quantities.delivered,
@@ -1971,12 +2072,14 @@ app.get('/api/bills/export', async (req, res) => {
         itemRows.push([
           selectedDate,
           bill.bill_no,
+          bill.assigned_partner_name || '',
           bill.outlet_name,
           bill.address,
           item.item_name,
           ordered,
           delivered,
           returned,
+          returned > 0 ? item.return_type : '',
           Math.max(0, ordered - delivered - returned),
           status
         ]);
@@ -1993,7 +2096,7 @@ app.get('/api/bills/export', async (req, res) => {
       ['Total Units Pending', pendingUnits],
       [],
       [],
-      ['Bill Number', 'Outlet', 'Delivery Area / Address', 'Status', 'Item Lines', 'Units Ordered', 'Units Delivered', 'Units Returned', 'Units Pending'],
+      ['Bill Number', 'Delivery Partner', 'Outlet', 'Delivery Area / Address', 'Status', 'Return Reason', 'Item Lines', 'Units Ordered', 'Units Delivered', 'Units Returned', 'Units Pending'],
       ...billSummaries
     );
 
