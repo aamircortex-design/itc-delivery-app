@@ -788,14 +788,23 @@ app.patch('/api/bills/assignments', async (req, res) => {
 app.use(express.static(path.join(__dirname, 'public')));
 
 const normalizeHeader = value => String(value).toLowerCase().replace(/[^a-z0-9]/g, '');
+const profitabilityExcludedItemsByDate = new Map([
+  ['2026-10-06', new Set(['pfdso0544', '12863'])]
+]);
 const headerAliases = {
-  billno: ['billno', 'billnumber', 'invoiceno', 'invoicenumber', 'orderid'],
+  billno: ['billno', 'billnumber', 'invoiceno', 'invoicenumber', 'orderid', 'purchaseinvoiceno', 'supplierinvoiceno'],
   outletname: ['outletname', 'outlet', 'customername', 'storename', 'recipient'],
   address: ['address', 'deliveryaddress', 'location'],
   salesman: ['salesman', 'salesmanname', 'salesperson', 'salespersonname', 'salesrep', 'salesrepresentative', 'representative', 'dsname'],
   itemname: ['itemname', 'item', 'productname', 'product'],
-  quantity: ['quantity', 'qty', 'qtyordered', 'orderedquantity', 'invoiceqty'],
-  invoiceDate: ['invoicedate', 'invoicesrdate', 'invoicesalesdate', 'salesdate', 'billdate', 'date'],
+  category: ['category', 'cagetory', 'productcategory', 'itemcategory'],
+  itemcode: ['itemcode', 'productcode', 'sku', 'marketsku', 'itemid'],
+  quantity: ['quantity', 'qty', 'qtyordered', 'orderedquantity', 'invoiceqty', 'purchaseqty', 'qtypurchased', 'receivedqty'],
+  salesReturnQty: ['salesreturnqty', 'salesreturnquantity', 'salesreturnqnty', 'returnqty', 'returnquantity', 'returnedqty', 'srqty'],
+  invoiceDate: ['invoicedate', 'invoicesrdate', 'invoicesalesdate', 'salesdate', 'billdate', 'date', 'purchasedate', 'purchaseregisterdate'],
+  grossAmount: ['grossamount', 'pretaxamount', 'taxablevalue', 'taxableamount', 'assessablevalue'],
+  rfaAmount: ['totaldiscount', 'discountamount', 'claimamount', 'rfa', 'rfaamount'],
+  outputTax: ['taxgroupamount', 'outputtax', 'outputgst', 'gstamount', 'taxamount'],
   salesReturn: ['salesreturn', 'salesreturnno', 'salesreturnnumber', 'returnno'],
   beat: ['beat']
 };
@@ -974,15 +983,66 @@ function getBillStatus(totals) {
   return 'Pending';
 }
 
-async function parseDeliveryRows(file) {
+async function readTabularFile(file) {
   const extension = path.extname(file.originalname).toLowerCase();
-  let sheetRows;
   if (extension === '.csv') {
-    sheetRows = parse(file.buffer, { bom: true, skip_empty_lines: true, relax_column_count: true, trim: true });
-  } else {
-    const worksheets = await readXlsxFile(Readable.from([file.buffer]));
-    sheetRows = worksheets[0]?.data || [];
+    const options = { bom: true, skip_empty_lines: true, relax_column_count: true, trim: true };
+    try {
+      return parse(file.buffer, options);
+    } catch (error) {
+      if (!String(error.code || '').includes('QUOTE')) throw error;
+      const lines = file.buffer.toString('utf8').split(/\r\n|\n|\r/);
+      const headerLineIndex = lines.findIndex(line => {
+        const normalizedLine = normalizeHeader(line);
+        return ['billno', 'quantity', 'invoiceDate', 'grossAmount'].every(field =>
+          headerAliases[field].some(alias => normalizedLine.includes(alias))
+        );
+      });
+      if (headerLineIndex === -1) throw error;
+      return parse(lines.slice(headerLineIndex).join('\n'), {
+        ...options,
+        relax_quotes: true
+      });
+    }
   }
+  const worksheets = await readXlsxFile(Readable.from([file.buffer]));
+  return worksheets[0]?.data || [];
+}
+
+async function readTabularWorksheets(file) {
+  const extension = path.extname(file.originalname).toLowerCase();
+  if (extension === '.csv') {
+    return [{
+      name: path.basename(file.originalname),
+      data: parse(file.buffer, { bom: true, skip_empty_lines: true, relax_column_count: true, trim: true })
+    }];
+  }
+  return readXlsxFile(Readable.from([file.buffer]));
+}
+
+function parseAmount(value, fieldName, rowNumber) {
+  const text = String(value ?? '').trim().replace(/,/g, '');
+  if (!text) {
+    throw new Error(`Row ${rowNumber} is missing ${fieldName}.`);
+  }
+  const amount = Number(text);
+  if (!Number.isFinite(amount) || Math.abs(amount) > 1e12) {
+    throw new Error(`Row ${rowNumber} has an invalid ${fieldName}.`);
+  }
+  return amount;
+}
+
+function findReportHeaderIndex(sheetRows, requiredAliases) {
+  return sheetRows.findIndex(row => {
+    const available = new Set(row.map(normalizeHeader));
+    return requiredAliases.every(field =>
+      headerAliases[field].some(alias => available.has(normalizeHeader(alias)))
+    );
+  });
+}
+
+async function parseDeliveryRows(file) {
+  const sheetRows = await readTabularFile(file);
 
   const headerIndex = findHeaderIndex(sheetRows);
   if (headerIndex === -1) {
@@ -999,6 +1059,608 @@ async function parseDeliveryRows(file) {
 
   return { rows, isSalesRegister, hasInvoiceDate };
 }
+
+app.post('/api/profitability/sales', upload.single('file'), async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Administrator access is required to import profitability sales data.' });
+  }
+  if (!req.file) return res.status(400).json({ error: 'Choose a sales register file to upload.' });
+
+  let transactionOpen = false;
+  try {
+    const selectedDate = normalizeDeliveryDate(req.body.deliveryDate);
+    if (!selectedDate) return res.status(400).json({ error: 'Choose a valid sales date before importing.' });
+
+    const sheetRows = await readTabularFile(req.file);
+    const headerIndex = findReportHeaderIndex(sheetRows, ['billno', 'quantity', 'invoiceDate', 'grossAmount']);
+    if (headerIndex === -1) {
+      return res.status(400).json({
+        error: 'The sales register must include Invoice No., Invoice / SR Date, Invoice Qty, Gross Amount, and Item Name or Item Code.'
+      });
+    }
+
+    const headers = sheetRows[headerIndex];
+    const normalizedHeaders = new Set(headers.map(normalizeHeader));
+    const hasItem = ['itemname', 'itemcode'].some(field =>
+      headerAliases[field].some(alias => normalizedHeaders.has(normalizeHeader(alias)))
+    );
+    const hasOutputTax = headerAliases.outputTax.some(alias =>
+      normalizedHeaders.has(normalizeHeader(alias))
+    );
+    if (!hasItem || !hasOutputTax) {
+      return res.status(400).json({
+        error: 'The sales register must include an Item Name or Item Code column and a Tax Group Amount / output tax column.'
+      });
+    }
+
+    const aggregated = new Map();
+    for (const [index, sourceRow] of sheetRows.slice(headerIndex + 1).entries()) {
+      if (!sourceRow.some(value => String(value ?? '').trim())) continue;
+      const rowNumber = headerIndex + index + 2;
+      const row = mapRow(headers, sourceRow);
+      const salesDate = normalizeDeliveryDate(row.invoiceDate);
+      if (!salesDate) throw new Error(`Row ${rowNumber} has an invalid or missing invoice date.`);
+      if (salesDate !== selectedDate) continue;
+      if (!row.billno || !row.itemname && !row.itemcode) {
+        throw new Error(`Row ${rowNumber} is missing an invoice number or item name/code.`);
+      }
+      const quantity = row.quantity === '' ? 0 : parseAmount(row.quantity, 'invoice quantity', rowNumber);
+      const salesReturnQty = row.salesReturnQty === '' ? 0 : Math.abs(parseAmount(row.salesReturnQty, 'sales return quantity', rowNumber));
+      const grossAmount = row.grossAmount === '' ? 0 : parseAmount(row.grossAmount, 'Gross Amount', rowNumber);
+      const rfaAmount = row.rfaAmount === '' ? 0 : parseAmount(row.rfaAmount, 'Total Discount / RFA', rowNumber);
+      const outputTax = row.outputTax === '' ? 0 : parseAmount(row.outputTax, 'Tax Group Amount / output tax', rowNumber);
+      if (quantity === 0 && salesReturnQty === 0 && grossAmount === 0 && rfaAmount === 0 && outputTax === 0) continue;
+
+      const itemCode = row.itemcode.trim();
+      const itemName = row.itemname.trim() || itemCode;
+      const category = row.category.trim() || 'Uncategorized';
+      const key = [
+        salesDate,
+        row.billno.trim().toLocaleLowerCase(),
+        itemCode.toLocaleLowerCase(),
+        itemName.toLocaleLowerCase()
+      ].join('\u0000');
+      const existing = aggregated.get(key);
+      if (existing) {
+        existing.quantity += quantity;
+        existing.salesReturnQty += salesReturnQty;
+        existing.grossAmount += grossAmount;
+        existing.rfaAmount += rfaAmount;
+        existing.outputTax += outputTax;
+      } else {
+        aggregated.set(key, {
+          salesDate,
+          billNo: row.billno.trim(),
+          outletName: row.outletname.trim(),
+          itemCode,
+          itemName,
+          category,
+          quantity,
+          salesReturnQty,
+          grossAmount,
+          rfaAmount,
+          outputTax
+        });
+      }
+    }
+
+    const rows = [...aggregated.values()];
+    if (!rows.length) {
+      return res.status(400).json({
+        error: `The sales register has no sales lines for ${selectedDate}. No other dates were imported.`
+      });
+    }
+    const db = req.app.locals.db;
+
+    await db.exec('BEGIN IMMEDIATE');
+    transactionOpen = true;
+    await db.run(
+      'DELETE FROM profitability_sales WHERE company_id = ? AND sales_date = ?',
+      [req.user.companyId, selectedDate]
+    );
+    for (const row of rows) {
+      await db.run(
+        `INSERT INTO profitability_sales
+          (company_id, sales_date, bill_no, outlet_name, item_code, item_name, quantity, sales_return_qty, sales_category, gross_amount, rfa_amount, output_tax)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(company_id, sales_date, bill_no, item_code, item_name)
+         DO UPDATE SET outlet_name = excluded.outlet_name, quantity = excluded.quantity,
+           sales_return_qty = excluded.sales_return_qty,
+           sales_category = excluded.sales_category,
+           gross_amount = excluded.gross_amount, rfa_amount = excluded.rfa_amount, output_tax = excluded.output_tax`,
+        [
+          req.user.companyId, row.salesDate, row.billNo, row.outletName, row.itemCode, row.itemName,
+          row.quantity, row.salesReturnQty, row.category, row.grossAmount, row.rfaAmount, row.outputTax
+        ]
+      );
+    }
+    await db.exec('COMMIT');
+    transactionOpen = false;
+    res.json({
+      message: `Imported ${rows.length} item lines for ${selectedDate}.`,
+      importedLines: rows.length,
+      salesDate: selectedDate
+    });
+  } catch (error) {
+    if (transactionOpen) await req.app.locals.db.exec('ROLLBACK');
+    if (error.message.startsWith('Row ')) return res.status(400).json({ error: error.message });
+    if (String(error.code || '').includes('QUOTE')) {
+      return res.status(400).json({
+        error: `The sales-register CSV has invalid quoting near line ${error.lines || 'unknown'}. Re-export it as CSV or upload the Excel workbook.`
+      });
+    }
+    console.error('Could not import profitability sales data:', error);
+    res.status(500).json({ error: 'Could not import the sales register. Please check the file and try again.' });
+  }
+});
+
+app.post('/api/profitability/product-costs', upload.single('file'), async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Administrator access is required to import profitability product costs.' });
+  }
+  if (!req.file) return res.status(400).json({ error: 'Choose a SKU purchase-cost file to upload.' });
+
+  let transactionOpen = false;
+  try {
+    const worksheets = await readTabularWorksheets(req.file);
+    const costAliases = {
+      itemCode: ['sku', 'itemcode', 'productcode', 'marketsku', 'itemid'],
+      itemName: ['itemname', 'productname', 'productdescription', 'item', 'product'],
+      purchaseCost: ['purchaseprice', 'purchaseunitcost', 'unitpurchaseprice', 'costprice', 'costperunit'],
+      gstRate: ['gstpercentage', 'gstpercent', 'gstrate', 'gst'],
+      netPts: ['netpts', 'netpt', 'netptrs', 'netptprice', 'netpurchaseprice'],
+      originalPts: ['originalpts', 'originalpt', 'originalptrs'],
+      invoiceDiscount: ['invdisc', 'invdiscpercent', 'invoicedisc', 'invoicediscpercent', 'invoicediscount', 'invoicediscountpercent'],
+      sgstRate: ['sgst', 'sgstpercentage', 'sgstpercent', 'sgstrate', 'sgstutgstrate'],
+      cgstRate: ['cgst', 'cgstpercentage', 'cgstpercent', 'cgstrate'],
+      igstRate: ['igst', 'igstpercentage', 'igstpercent', 'igstrate'],
+      invoiceDate: ['invoicedate', 'purchasedate', 'purchaseinvoicedate', 'date'],
+      invoiceRef: ['invoicerefno', 'invoicerefnumber', 'invoiceno', 'invoicenumber'],
+      priceIncludingGst: [
+        'netpriceperpcincludinggst',
+        'netpriceperpieceincludinggst',
+        'netpriceperpcinclgst',
+        'priceperpcincludinggst',
+        'unitpriceincludinggst'
+      ]
+    };
+    const matchingWorksheets = [];
+    for (const worksheet of worksheets) {
+      const headerIndex = worksheet.data.findIndex(row => {
+        const headers = row.map(normalizeHeader);
+        const indexes = {
+          itemCode: headers.findIndex(header => costAliases.itemCode.includes(header)),
+          itemName: headers.findIndex(header => costAliases.itemName.includes(header)),
+          purchaseCost: headers.findIndex(header => costAliases.purchaseCost.includes(header)),
+          gstRate: headers.findIndex(header => costAliases.gstRate.includes(header)),
+          priceIncludingGst: headers.findIndex(header => costAliases.priceIncludingGst.includes(header)),
+          netPts: headers.findIndex(header => costAliases.netPts.includes(header)),
+          originalPts: headers.findIndex(header => costAliases.originalPts.includes(header)),
+          invoiceDiscount: headers.findIndex(header => costAliases.invoiceDiscount.includes(header)),
+          sgstRate: headers.findIndex(header => costAliases.sgstRate.includes(header)),
+          cgstRate: headers.findIndex(header => costAliases.cgstRate.includes(header)),
+          igstRate: headers.findIndex(header => costAliases.igstRate.includes(header)),
+          invoiceDate: headers.findIndex(header => costAliases.invoiceDate.includes(header)),
+          invoiceRef: headers.findIndex(header => costAliases.invoiceRef.includes(header))
+        };
+        const hasItemCode = indexes.itemCode !== -1;
+        const hasPreTaxPurchasePrice = indexes.purchaseCost !== -1;
+        const hasGrossUnitPriceAndGst = indexes.priceIncludingGst !== -1 && indexes.gstRate !== -1;
+        const hasPtsAndTaxRates = (indexes.originalPts !== -1 || indexes.netPts !== -1) &&
+          indexes.invoiceDiscount !== -1 &&
+          ((indexes.sgstRate !== -1 && indexes.cgstRate !== -1) || indexes.igstRate !== -1);
+        if (hasItemCode && (hasPreTaxPurchasePrice || hasGrossUnitPriceAndGst || hasPtsAndTaxRates)) {
+          return indexes;
+        }
+        return false;
+      });
+      if (headerIndex !== -1) {
+        const headerIndexes = worksheet.data[headerIndex].map(normalizeHeader);
+        matchingWorksheets.push({
+          sheetName: String(worksheet.sheet || worksheet.name || 'Worksheet'),
+          sheetRows: worksheet.data,
+          headerIndex,
+          headerIndexes: {
+            itemCode: headerIndexes.findIndex(header => costAliases.itemCode.includes(header)),
+            itemName: headerIndexes.findIndex(header => costAliases.itemName.includes(header)),
+            purchaseCost: headerIndexes.findIndex(header => costAliases.purchaseCost.includes(header)),
+            gstRate: headerIndexes.findIndex(header => costAliases.gstRate.includes(header)),
+            priceIncludingGst: headerIndexes.findIndex(header => costAliases.priceIncludingGst.includes(header)),
+            netPts: headerIndexes.findIndex(header => costAliases.netPts.includes(header)),
+            originalPts: headerIndexes.findIndex(header => costAliases.originalPts.includes(header)),
+            invoiceDiscount: headerIndexes.findIndex(header => costAliases.invoiceDiscount.includes(header)),
+            sgstRate: headerIndexes.findIndex(header => costAliases.sgstRate.includes(header)),
+            cgstRate: headerIndexes.findIndex(header => costAliases.cgstRate.includes(header)),
+            igstRate: headerIndexes.findIndex(header => costAliases.igstRate.includes(header)),
+            invoiceDate: headerIndexes.findIndex(header => costAliases.invoiceDate.includes(header)),
+            invoiceRef: headerIndexes.findIndex(header => costAliases.invoiceRef.includes(header))
+          }
+        });
+      }
+    }
+    const worksheetsWithProducts = matchingWorksheets.filter(({ sheetRows, headerIndex }) =>
+      sheetRows.slice(headerIndex + 1).some(row => row.some(value => String(value ?? '').trim()))
+    );
+    if (!worksheetsWithProducts.length) {
+      if (!matchingWorksheets.length) {
+        return res.status(400).json({
+          error: 'No worksheet contains the required product-code and purchase-price columns. Check that the selected worksheet has the column headers and SKU data.'
+        });
+      }
+      return res.status(400).json({ error: 'The purchase worksheet contains no SKU rows.' });
+    }
+    if (worksheetsWithProducts.length > 1) {
+      return res.status(400).json({
+        error: `More than one worksheet contains purchase data (${worksheetsWithProducts.map(sheet => sheet.sheetName).join(', ')}). Keep the purchase list on one worksheet or upload only the intended worksheet.`
+      });
+    }
+    const { sheetName, sheetRows, headerIndex, headerIndexes } = worksheetsWithProducts[0];
+    const productsBySku = new Map();
+    let skippedNonProductRows = 0;
+    for (const [index, sourceRow] of sheetRows.slice(headerIndex + 1).entries()) {
+      if (!sourceRow.some(value => String(value ?? '').trim())) continue;
+      const rowNumber = headerIndex + index + 2;
+      const itemCode = String(sourceRow[headerIndexes.itemCode] ?? '').trim();
+      if (!itemCode) {
+        skippedNonProductRows += 1;
+        continue;
+      }
+      const skuKey = itemCode.toLocaleLowerCase();
+
+      let purchaseUnitCost;
+      let inputGstRate = null;
+      let purchaseDate = '';
+      let invoiceRef = '';
+      if (
+        (headerIndexes.originalPts !== -1 || headerIndexes.netPts !== -1) &&
+        headerIndexes.invoiceDiscount !== -1 &&
+        ((headerIndexes.sgstRate !== -1 && headerIndexes.cgstRate !== -1) || headerIndexes.igstRate !== -1)
+      ) {
+        const ptsIndex = headerIndexes.originalPts !== -1 ? headerIndexes.originalPts : headerIndexes.netPts;
+        const ptsLabel = headerIndexes.originalPts !== -1 ? 'Original PTS' : 'NET PTS';
+        const pts = parseAmount(sourceRow[ptsIndex], ptsLabel, rowNumber);
+        const discountRate = parseAmount(sourceRow[headerIndexes.invoiceDiscount], 'Inv Disc%', rowNumber);
+        if (pts < 0) throw new Error(`Row ${rowNumber} in worksheet "${sheetName}" has a negative ${ptsLabel}.`);
+        if (discountRate > 100) throw new Error(`Row ${rowNumber} in worksheet "${sheetName}" has an invalid Inv Disc% value.`);
+        let gstRate = 0;
+        if (headerIndexes.igstRate !== -1) {
+          gstRate = parseAmount(sourceRow[headerIndexes.igstRate], 'IGST percentage', rowNumber);
+          if (gstRate === 0 && headerIndexes.sgstRate !== -1 && headerIndexes.cgstRate !== -1) {
+            const sgstRate = parseAmount(sourceRow[headerIndexes.sgstRate], 'SGST percentage', rowNumber);
+            const cgstRate = parseAmount(sourceRow[headerIndexes.cgstRate], 'CGST percentage', rowNumber);
+            gstRate = sgstRate + cgstRate;
+          }
+        } else {
+          const sgstRate = parseAmount(sourceRow[headerIndexes.sgstRate], 'SGST percentage', rowNumber);
+          const cgstRate = parseAmount(sourceRow[headerIndexes.cgstRate], 'CGST percentage', rowNumber);
+          gstRate = sgstRate + cgstRate;
+        }
+        if (gstRate < 0 || gstRate > 100) {
+          throw new Error(`Row ${rowNumber} in worksheet "${sheetName}" has an invalid GST percentage.`);
+        }
+        const discountedPrice = pts * (1 - discountRate / 100);
+        if (discountedPrice < 0) throw new Error(`Row ${rowNumber} in worksheet "${sheetName}" has a negative discounted purchase price.`);
+        const purchasePriceIncludingGst = discountedPrice * (1 + gstRate / 100);
+        purchaseUnitCost = purchasePriceIncludingGst / (1 + gstRate / 100);
+        inputGstRate = gstRate;
+        if (headerIndexes.invoiceDate !== -1) {
+          purchaseDate = normalizeDeliveryDate(sourceRow[headerIndexes.invoiceDate]);
+          if (!purchaseDate) {
+            throw new Error(`Row ${rowNumber} in worksheet "${sheetName}" has an invalid or missing Invoice Date.`);
+          }
+        } else if (headerIndexes.invoiceRef !== -1) {
+          throw new Error(`The purchase worksheet "${sheetName}" needs an Invoice Date column to select the latest price for each SKU.`);
+        }
+        if (headerIndexes.invoiceRef !== -1) {
+          invoiceRef = String(sourceRow[headerIndexes.invoiceRef] ?? '').trim();
+        }
+      } else if (headerIndexes.priceIncludingGst !== -1 && headerIndexes.gstRate !== -1) {
+        const priceIncludingGst = parseAmount(
+          sourceRow[headerIndexes.priceIncludingGst],
+          'net price per piece including GST',
+          rowNumber
+        );
+        inputGstRate = parseAmount(sourceRow[headerIndexes.gstRate], 'GST percentage', rowNumber);
+        if (priceIncludingGst < 0) throw new Error(`Row ${rowNumber} in worksheet "${sheetName}" has a negative net price per piece.`);
+        if (inputGstRate < 0 || inputGstRate > 100) throw new Error(`Row ${rowNumber} in worksheet "${sheetName}" has an invalid GST percentage.`);
+        purchaseUnitCost = priceIncludingGst / (1 + inputGstRate / 100);
+      } else {
+        purchaseUnitCost = parseAmount(
+          sourceRow[headerIndexes.purchaseCost],
+          'purchase price',
+          rowNumber
+        );
+        if (purchaseUnitCost < 0) throw new Error(`Row ${rowNumber} in worksheet "${sheetName}" has a negative purchase price.`);
+      }
+      const itemName = String(sourceRow[headerIndexes.itemName] ?? '').trim() || itemCode;
+      const product = { itemCode, itemName, purchaseUnitCost, inputGstRate, purchaseDate, invoiceRef };
+      const existing = productsBySku.get(skuKey);
+      if (!existing || purchaseDate > existing.purchaseDate ||
+        (purchaseDate === existing.purchaseDate &&
+          invoiceRef.localeCompare(existing.invoiceRef, undefined, { numeric: true }) >= 0)) {
+        productsBySku.set(skuKey, product);
+      }
+    }
+    const products = [...productsBySku.values()];
+    if (!products.length) return res.status(400).json({ error: 'The file contains no SKU purchase-cost rows.' });
+
+    const db = req.app.locals.db;
+    await db.exec('BEGIN IMMEDIATE');
+    transactionOpen = true;
+    const existingProducts = await db.all(
+      'SELECT item_code FROM profitability_product_costs WHERE company_id = ?',
+      [req.user.companyId]
+    );
+    const existingSkus = new Set(existingProducts.map(product => String(product.item_code).toLocaleLowerCase()));
+    let addedCount = 0;
+    let updatedCount = 0;
+    for (const product of products) {
+      if (existingSkus.has(product.itemCode.toLocaleLowerCase())) updatedCount += 1;
+      else addedCount += 1;
+      await db.run(
+        `INSERT INTO profitability_product_costs
+          (company_id, item_code, item_name, purchase_unit_cost, input_gst_rate)
+         VALUES (?, ?, ?, ?, COALESCE(?, 0))
+         ON CONFLICT(company_id, item_code) WHERE item_code <> '' DO UPDATE SET
+           item_name = excluded.item_name,
+           purchase_unit_cost = excluded.purchase_unit_cost,
+           input_gst_rate = COALESCE(?, profitability_product_costs.input_gst_rate),
+           updated_at = CURRENT_TIMESTAMP`,
+        [
+          req.user.companyId,
+          product.itemCode,
+          product.itemName,
+          product.purchaseUnitCost,
+          product.inputGstRate,
+          product.inputGstRate
+        ]
+      );
+    }
+    await db.exec('COMMIT');
+    transactionOpen = false;
+    res.json({
+      message: `Worksheet "${sheetName}" processed using the latest purchase record: ${addedCount} new ${addedCount === 1 ? 'SKU' : 'SKUs'} added and ${updatedCount} existing ${updatedCount === 1 ? 'SKU' : 'SKUs'} updated.`,
+      importedCount: products.length,
+      addedCount,
+      updatedCount,
+      skippedNonProductRows
+    });
+  } catch (error) {
+    if (transactionOpen) await req.app.locals.db.exec('ROLLBACK');
+    if (error.message.startsWith('Row ')) return res.status(400).json({ error: error.message });
+    console.error('Could not import profitability product costs:', error);
+    res.status(500).json({ error: 'Could not import SKU purchase costs. Please check the file and try again.' });
+  }
+});
+
+app.get('/api/profitability/report', async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Administrator access is required to view profitability reports.' });
+  }
+
+  const selectedDate = normalizeDeliveryDate(req.query.date);
+  if (!selectedDate) {
+    return res.status(400).json({ error: 'Choose a valid profitability report date.' });
+  }
+
+  try {
+    const db = req.app.locals.db;
+    const sales = await db.all(
+      `SELECT * FROM profitability_sales
+       WHERE company_id = ? AND sales_date = ?
+       ORDER BY bill_no, item_name`,
+      [req.user.companyId, selectedDate]
+    );
+    const excludedCodes = profitabilityExcludedItemsByDate.get(selectedDate) || new Set();
+    const excludedSales = sales.filter(sale =>
+      excludedCodes.has(String(sale.item_code || '').trim().toLocaleLowerCase())
+    );
+    const excludedSaleIds = new Set(excludedSales.map(sale => sale.id));
+    const reportSales = sales.filter(sale => !excludedSaleIds.has(sale.id));
+    const productCosts = await db.all(
+      `SELECT item_code, item_name, purchase_unit_cost, input_gst_rate
+       FROM profitability_product_costs
+       WHERE company_id = ?
+       ORDER BY CASE WHEN item_code = '' THEN 1 ELSE 0 END, item_code, item_name`,
+      [req.user.companyId]
+    );
+
+    const costsByCode = new Map();
+    const costsByName = new Map();
+    let inputGst = 0;
+    for (const productCost of productCosts) {
+      const cost = Number(productCost.purchase_unit_cost);
+      const gstRate = Number(productCost.input_gst_rate);
+      if (!Number.isFinite(cost) || cost < 0 || !Number.isFinite(gstRate) || gstRate < 0 || gstRate > 100) continue;
+      const value = { purchaseUnitCost: cost, inputGstRate: gstRate };
+      const code = String(productCost.item_code || '').trim().toLocaleLowerCase();
+      const name = String(productCost.item_name || '').trim().toLocaleLowerCase();
+      if (code) costsByCode.set(code, value);
+      else if (name) costsByName.set(name, value);
+    }
+
+    const groupedBills = new Map();
+    const groupedItems = new Map();
+    const missingItems = new Map();
+    let grossAmount = 0;
+    let rfaAmount = 0;
+    let outputTax = 0;
+    let cogs = 0;
+    for (const sale of reportSales) {
+      const key = `${sale.sales_date}\u0000${sale.bill_no.toLocaleLowerCase()}`;
+      let bill = groupedBills.get(key);
+      if (!bill) {
+        bill = {
+          salesDate: sale.sales_date,
+          billNo: sale.bill_no,
+          outletName: sale.outlet_name,
+          grossAmount: 0,
+          rfaAmount: 0,
+          outputTax: 0,
+          inputGst: 0,
+          cogs: 0,
+          missingCostItems: []
+        };
+        groupedBills.set(key, bill);
+      }
+
+      const lineGross = Number(sale.gross_amount);
+      const lineRfa = Number(sale.rfa_amount);
+      const lineTax = Number(sale.output_tax);
+      const quantity = Number(sale.quantity) - Number(sale.sales_return_qty || 0);
+      const codeKey = String(sale.item_code || '').trim().toLocaleLowerCase();
+      const nameKey = String(sale.item_name || '').trim().toLocaleLowerCase();
+      const productCost = (codeKey && costsByCode.has(codeKey) ? costsByCode.get(codeKey) : undefined) ??
+        costsByName.get(nameKey);
+      const itemKey = [
+        sale.bill_no.toLocaleLowerCase(),
+        codeKey || nameKey,
+        nameKey
+      ].join('\u0000');
+      let item = groupedItems.get(itemKey);
+      if (!item) {
+        item = {
+          billNo: sale.bill_no,
+          itemCode: sale.item_code || '',
+          itemName: sale.item_name || sale.item_code,
+          grossAmount: 0,
+          rfaAmount: 0,
+          outputTax: 0,
+          quantity: 0,
+          cogs: 0,
+          inputGst: 0,
+          missingCost: false
+        };
+        groupedItems.set(itemKey, item);
+      }
+      grossAmount += lineGross;
+      rfaAmount += lineRfa;
+      outputTax += lineTax;
+      bill.grossAmount += lineGross;
+      bill.rfaAmount += lineRfa;
+      bill.outputTax += lineTax;
+      item.grossAmount += lineGross;
+      item.rfaAmount += lineRfa;
+      item.outputTax += lineTax;
+      item.quantity += quantity;
+      if (productCost === undefined) {
+        const itemLabel = sale.item_name || sale.item_code;
+        bill.missingCostItems.push(itemLabel);
+        missingItems.set(itemLabel, true);
+        item.missingCost = true;
+      } else {
+        const lineNetCost = quantity * productCost.purchaseUnitCost;
+        const lineInputGst = lineNetCost * productCost.inputGstRate / 100;
+        bill.cogs += lineNetCost;
+        cogs += lineNetCost;
+        bill.inputGst += lineInputGst;
+        inputGst += lineInputGst;
+        item.cogs += lineNetCost;
+        item.inputGst += lineInputGst;
+      }
+    }
+
+    const missingCostItems = [...missingItems.keys()].sort((left, right) => left.localeCompare(right));
+    const missingQuantityItems = [];
+    const items = [...groupedItems.values()].map(item => {
+      const missingQuantity = item.quantity === 0 &&
+        (item.grossAmount !== 0 || item.rfaAmount !== 0 || item.outputTax !== 0);
+      if (missingQuantity) {
+        missingQuantityItems.push(`${item.itemName} [${item.itemCode}]`);
+      }
+      const complete = !item.missingCost && !missingQuantity;
+      const netProfitWithoutRfa = complete ? item.grossAmount - item.cogs : null;
+      const netProfitWithRfa = complete ? item.grossAmount + item.rfaAmount - item.cogs : null;
+      const purchaseCostWithGst = item.cogs + item.inputGst;
+      return {
+        billNo: item.billNo,
+        itemCode: item.itemCode,
+        itemName: item.itemName,
+        purchaseCost: complete ? item.cogs : null,
+        netSellingCost: item.grossAmount,
+        gstPayable: complete ? item.outputTax - item.inputGst : null,
+        netMarginBeforeRfa: complete && purchaseCostWithGst !== 0
+          ? netProfitWithoutRfa / purchaseCostWithGst * 100
+          : null,
+        rfaAmount: item.rfaAmount,
+        netMarginAfterRfa: complete && purchaseCostWithGst !== 0
+          ? netProfitWithRfa / purchaseCostWithGst * 100
+          : null,
+        netProfitWithoutRfa,
+        netProfitWithRfa,
+        missingCost: item.missingCost,
+        missingQuantity
+      };
+    });
+    const profitabilityIncomplete = missingCostItems.length > 0 || missingQuantityItems.length > 0;
+    const bills = [...groupedBills.values()].map(bill => ({
+      ...bill,
+      missingCostItems: [...new Set(bill.missingCostItems)],
+      cogs: bill.missingCostItems.length ? null : bill.cogs,
+      inputGst: bill.missingCostItems.length ? null : bill.inputGst,
+      netProfitWithoutRfa: bill.missingCostItems.length ? null : bill.grossAmount - bill.cogs,
+      netProfitWithRfa: bill.missingCostItems.length ? null : bill.grossAmount + bill.rfaAmount - bill.cogs
+    }));
+    res.json({
+      salesDate: selectedDate,
+      excludedItems: [...new Set(excludedSales.map(sale => sale.item_name || sale.item_code))],
+      summary: {
+        billCount: bills.length,
+        grossAmount,
+        rfaAmount,
+        cogs: profitabilityIncomplete ? null : cogs,
+        netProfitWithoutRfa: profitabilityIncomplete ? null : grossAmount - cogs,
+        netProfitWithRfa: profitabilityIncomplete ? null : grossAmount + rfaAmount - cogs,
+        outputTax,
+        inputGst: profitabilityIncomplete ? null : inputGst,
+        gstPayable: profitabilityIncomplete ? null : outputTax - inputGst,
+        missingCostItems,
+        missingQuantityItems
+      },
+      bills,
+      items
+    });
+  } catch (error) {
+    console.error('Could not create profitability report:', error);
+    res.status(500).json({ error: 'Could not create the profitability report. Please try again.' });
+  }
+});
+
+app.get('/api/profitability/rfa-report', async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Administrator access is required to view RFA reports.' });
+  }
+
+  const fromDate = normalizeDeliveryDate(req.query.fromDate);
+  const toDate = normalizeDeliveryDate(req.query.toDate);
+  if (!fromDate || !toDate) {
+    return res.status(400).json({ error: 'Choose valid from and to dates for the RFA report.' });
+  }
+  if (fromDate > toDate) {
+    return res.status(400).json({ error: 'The from date must be on or before the to date.' });
+  }
+
+  try {
+    const rows = await req.app.locals.db.all(
+      `SELECT COALESCE(NULLIF(TRIM(sales_category), ''), 'Uncategorized') AS category,
+              SUM(rfa_amount) AS netRfa
+       FROM profitability_sales
+       WHERE company_id = ? AND sales_date BETWEEN ? AND ?
+       GROUP BY category COLLATE NOCASE
+       ORDER BY category COLLATE NOCASE`,
+      [req.user.companyId, fromDate, toDate]
+    );
+    res.json({
+      fromDate,
+      toDate,
+      totalNetRfa: rows.reduce((total, row) => total + Number(row.netRfa), 0),
+      rows
+    });
+  } catch (error) {
+    console.error('Could not create RFA report:', error);
+    res.status(500).json({ error: 'Could not create the RFA report. Please try again.' });
+  }
+});
 
 app.post('/api/bills/upload', upload.single('file'), async (req, res) => {
   if (req.user.role === 'delivery_partner') {

@@ -64,6 +64,41 @@ async function initDb() {
       UNIQUE (bill_id, item_name)
     );
 
+    CREATE TABLE IF NOT EXISTS profitability_sales (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      sales_date TEXT NOT NULL,
+      bill_no TEXT NOT NULL COLLATE NOCASE,
+      outlet_name TEXT NOT NULL DEFAULT '',
+      item_code TEXT NOT NULL DEFAULT '' COLLATE NOCASE,
+      item_name TEXT NOT NULL COLLATE NOCASE,
+      quantity REAL NOT NULL,
+      sales_return_qty REAL NOT NULL DEFAULT 0,
+      sales_category TEXT NOT NULL DEFAULT 'Uncategorized',
+      gross_amount REAL NOT NULL,
+      rfa_amount REAL NOT NULL DEFAULT 0,
+      output_tax REAL NOT NULL DEFAULT 0,
+      UNIQUE (company_id, sales_date, bill_no, item_code, item_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS profitability_product_costs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      item_code TEXT NOT NULL DEFAULT '' COLLATE NOCASE,
+      item_name TEXT NOT NULL COLLATE NOCASE,
+      purchase_unit_cost REAL NOT NULL CHECK (purchase_unit_cost >= 0),
+      input_gst_rate REAL NOT NULL DEFAULT 0 CHECK (input_gst_rate >= 0 AND input_gst_rate <= 100),
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (company_id, item_code, item_name)
+    );
+
+    CREATE INDEX IF NOT EXISTS profitability_sales_period
+      ON profitability_sales(company_id, sales_date);
+    CREATE UNIQUE INDEX IF NOT EXISTS profitability_product_costs_by_code
+      ON profitability_product_costs(company_id, item_code) WHERE item_code <> '';
+    CREATE UNIQUE INDEX IF NOT EXISTS profitability_product_costs_by_name
+      ON profitability_product_costs(company_id, item_name) WHERE item_code = '';
+
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       full_name TEXT NOT NULL,
@@ -153,6 +188,14 @@ async function initDb() {
   }
   if (!userColumns.some(column => column.name === 'email')) {
     await db.exec('ALTER TABLE users ADD COLUMN email TEXT');
+  }
+
+  const profitabilitySalesColumns = await db.all('PRAGMA table_info(profitability_sales)');
+  if (!profitabilitySalesColumns.some(column => column.name === 'sales_return_qty')) {
+    await db.exec('ALTER TABLE profitability_sales ADD COLUMN sales_return_qty REAL NOT NULL DEFAULT 0');
+  }
+  if (!profitabilitySalesColumns.some(column => column.name === 'sales_category')) {
+    await db.exec("ALTER TABLE profitability_sales ADD COLUMN sales_category TEXT NOT NULL DEFAULT 'Uncategorized'");
   }
 
   const billColumns = await db.all('PRAGMA table_info(bills)');

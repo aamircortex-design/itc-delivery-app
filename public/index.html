@@ -28,11 +28,11 @@
 
         <div class="nav-caption">WORKSPACE</div>
         <nav class="side-nav">
-          <a class="nav-link" href="#overview">
+          <a class="nav-link" id="overview-link" href="#overview">
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/></svg>
             Overview
           </a>
-          <a class="nav-link active" href="#deliveries" aria-current="page">
+          <a class="nav-link active" id="deliveries-link" href="#deliveries" aria-current="page">
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 6.5h11v11H3zM14 10h3.3l3.2 3.5v4H14z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="7.5" cy="18" r="2" fill="#14251f" stroke="currentColor" stroke-width="1.7"/><circle cx="17.5" cy="18" r="2" fill="#14251f" stroke="currentColor" stroke-width="1.7"/></svg>
             Deliveries
             <span class="nav-count" id="nav-count">0</span>
@@ -44,6 +44,10 @@
           <a class="nav-link" id="user-management-link" href="/users" hidden>
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="9" cy="8" r="3" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 19c.5-3 2.4-4.5 5.5-4.5s5 1.5 5.5 4.5M16 7.5a2.8 2.8 0 0 1 0 5.5M17 15c2.1.5 3.3 1.8 3.6 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
             Manage users
+          </a>
+          <a class="nav-link" id="profitability-link" href="#profitability" hidden>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 19.5h16M6.5 16V10m5 6V5m5 11v-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6.5" cy="8" r="1.5" stroke="currentColor" stroke-width="1.6"/><circle cx="11.5" cy="3.5" r="1.5" stroke="currentColor" stroke-width="1.6"/><circle cx="16.5" cy="10" r="1.5" stroke="currentColor" stroke-width="1.6"/></svg>
+            Profitability
           </a>
         </nav>
 
@@ -178,6 +182,97 @@
             <div class="table-footer"><span id="table-footer-copy">Showing 0 deliveries</span><span class="footer-note"><span class="footer-live-dot"></span> Up to date</span></div>
           </section>
           <footer class="page-footer"><span>Keep your deliveries moving.</span><span>TAF Disti Desk <span class="footer-separator">·</span> Delivery tracker</span><span class="creator-credit">Created by Aamir Rahman · TAF Tech</span></footer>
+        </div>
+
+        <div class="page-content profitability-page" id="profitability" hidden>
+          <section class="page-heading">
+            <div>
+              <div class="eyebrow"><span class="eyebrow-dot"></span> ADMIN ONLY · FINANCIAL REPORTING</div>
+              <h1>Profitability <span>reports.</span></h1>
+              <p class="page-subtitle">Review SKU profitability and net RFA due from the company.</p>
+            </div>
+          </section>
+
+          <section class="profitability-controls" aria-label="Profitability report date">
+            <label class="date-field" for="profit-date"><span>Report date</span><input id="profit-date" type="date" required></label>
+            <span class="profitability-date-help">This date applies to SKU profitability and the sales-register upload.</span>
+          </section>
+
+          <div class="profitability-tabs" role="tablist" aria-label="Profitability reports">
+            <button class="profitability-tab active" id="profitability-sku-tab-button" type="button" role="tab" aria-selected="true" aria-controls="profitability-sku-report">SKU profitability</button>
+            <button class="profitability-tab" id="profitability-rfa-tab-button" type="button" role="tab" aria-selected="false" aria-controls="profitability-rfa-report">Net RFA due from company</button>
+          </div>
+
+          <div id="profitability-sku-report" role="tabpanel" aria-labelledby="profitability-sku-tab-button">
+          <section class="profitability-import-grid" aria-label="Import report data">
+            <article class="profitability-import-card">
+              <div>
+                <h2>Sales register</h2>
+                <p>Upload the same Sales Register - Itemwise file used for deliveries. The selected date's report shows one row per bill and SKU; other dates are left unchanged.</p>
+                <p class="profitability-format-hint">Uses Invoice Qty, Sales Return Qty, Gross Amount (pre-tax), Total Discount (RFA), and Tax Group Amount (output GST). Return quantity reduces sold quantity and purchase cost; sales-register return amounts and tax should be negative.</p>
+                <p class="profitability-format-hint">Upload SKU purchase prices in the product-cost card below. Purchase prices are pre-tax per-unit costs; input GST rates remain managed in backend product-cost data.</p>
+              </div>
+              <input class="visually-hidden" id="profit-sales-file" type="file" accept=".csv,.xlsx">
+              <button class="button button-primary" id="import-profit-sales" type="button">Upload sales register</button>
+              <div class="profitability-import-status" id="profit-sales-status" role="status"></div>
+            </article>
+            <article class="profitability-import-card">
+              <div>
+                <h2>Purchase price file</h2>
+                <p>Upload your purchase register as an Excel or CSV file. The latest purchase for each SKU is used; new SKUs are added and existing SKUs are updated. SKUs not in the file are left unchanged.</p>
+                <p class="profitability-format-hint">Uses Product Code and prefers Original PTS (NET PTS only if Original PTS is absent), less Inv Disc%. The latest invoice date and highest same-date invoice reference determine each SKU's cost; CGST/SGST or IGST is used for input GST.</p>
+              </div>
+              <input class="visually-hidden" id="profit-costs-file" type="file" accept=".csv,.xlsx">
+              <button class="button button-primary" id="import-profit-costs" type="button">Upload purchase price file</button>
+              <div class="profitability-import-status" id="profit-costs-status" role="status"></div>
+            </article>
+          </section>
+
+          <section class="profitability-panel">
+            <div class="dialog-error profitability-error" id="profitability-error" role="alert" hidden></div>
+            <div class="profitability-summary-grid" aria-label="Profitability totals">
+              <article class="profitability-summary-card"><span>Gross sales · pre-tax</span><strong id="profit-gross">—</strong></article>
+              <article class="profitability-summary-card"><span>Net purchase cost · pre-tax</span><strong id="profit-cogs">—</strong></article>
+              <article class="profitability-summary-card"><span>Net profit · without RFA</span><strong id="profit-without-rfa">—</strong></article>
+              <article class="profitability-summary-card"><span>Net profit · with RFA</span><strong id="profit-with-rfa">—</strong></article>
+              <article class="profitability-summary-card"><span>RFA claim · separate</span><strong id="profit-rfa">—</strong></article>
+              <article class="profitability-summary-card"><span>Output GST on sales</span><strong id="profit-output-gst">—</strong></article>
+              <article class="profitability-summary-card"><span>Estimated input GST on sold items</span><strong id="profit-input-gst">—</strong></article>
+              <article class="profitability-summary-card"><span>GST payable · output − input</span><strong id="profit-gst-payable">—</strong></article>
+            </div>
+            <div class="profitability-warning" id="profitability-warning" role="status" hidden></div>
+            <div class="table-scroll profitability-table-scroll">
+              <table>
+                <thead><tr><th>BILL NO.</th><th>SKU CODE</th><th>SKU NAME</th><th>NET PURCHASE COST · PRE-TAX</th><th>NET SELLING COST · PRE-TAX</th><th>GST PAYABLE</th><th>NET MARGIN BEFORE RFA</th><th>RFA AMOUNT</th><th>NET MARGIN AFTER RFA</th></tr></thead>
+                <tbody id="profitability-rows"></tbody>
+              </table>
+              <div class="empty-state" id="profitability-empty" hidden><h3>No sales for this date</h3><p>Choose another date or upload the sales register for this day.</p></div>
+            </div>
+          </section>
+          <footer class="page-footer"><span>Profit amounts use pre-tax selling and purchase costs; GST payable is output GST minus estimated input GST. Margin percentages use GST-inclusive purchase cost as the denominator. Before RFA = profit before RFA ÷ purchase cost including GST; after RFA adds RFA to profit before dividing by purchase cost including GST.</span><span>Profitability report · Admin only</span></footer>
+          </div>
+
+          <section id="profitability-rfa-report" role="tabpanel" aria-labelledby="profitability-rfa-tab-button" hidden>
+            <section class="profitability-controls" aria-label="Net RFA report date range">
+              <label class="date-field" for="rfa-from-date"><span>From date</span><input id="rfa-from-date" type="date" required></label>
+              <label class="date-field" for="rfa-to-date"><span>To date</span><input id="rfa-to-date" type="date" required></label>
+              <span class="profitability-date-help">Net RFA is totaled by category for this period.</span>
+            </section>
+            <section class="profitability-panel">
+              <div class="dialog-error profitability-error" id="rfa-report-error" role="alert" hidden></div>
+              <div class="profitability-rfa-date" id="rfa-report-date"></div>
+              <div class="profitability-summary-grid rfa-summary-grid" aria-label="Net RFA totals">
+                <article class="profitability-summary-card"><span>Net RFA due from company · selected period</span><strong id="rfa-report-total">—</strong></article>
+              </div>
+              <div class="table-scroll profitability-table-scroll">
+                <table>
+                  <thead><tr><th>CATEGORY</th><th>NET RFA DUE</th></tr></thead>
+                  <tbody id="rfa-report-rows"></tbody>
+                </table>
+                <div class="empty-state" id="rfa-report-empty" hidden><h3>No RFA data for these dates</h3><p>Upload the sales register for the selected date range.</p></div>
+              </div>
+            </section>
+          </section>
         </div>
       </main>
     </div>

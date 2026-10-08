@@ -79,6 +79,16 @@ function formatDateTime(value) {
   }).format(date);
 }
 
+function formatCurrency(value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(Number(value));
+}
+
 function formatDuration(start, end = new Date()) {
   if (!start) return '';
   const startTime = new Date(start).getTime();
@@ -315,6 +325,7 @@ async function loadCurrentUser() {
   document.querySelector('#top-profile-avatar').textContent = initial;
   document.querySelector('#top-profile-avatar').setAttribute('aria-label', `Sign out ${user.fullName}`);
   document.querySelector('#user-management-link').hidden = user.role !== 'admin';
+  document.querySelector('#profitability-link').hidden = user.role !== 'admin';
   document.querySelector('#open-upload').hidden = user.role === 'delivery_partner';
   document.querySelector('#download-template').hidden = user.role === 'delivery_partner';
   document.querySelector('#modal-template').hidden = user.role === 'delivery_partner';
@@ -342,6 +353,8 @@ async function loadCurrentUser() {
       ? 'Only deliveries assigned to your account are shown.'
       : 'View orders and update delivery progress for the selected day.';
   document.querySelector('#empty-upload').hidden = user.role === 'delivery_partner';
+  initializeProfitabilityDates();
+  showDashboardPage('deliveries');
   renderRows();
 }
 
@@ -350,6 +363,203 @@ async function loadDeliveryPartners() {
   deliveryPartners = await requestJson('/api/delivery-partners');
   document.querySelector('#bulk-partner-select').innerHTML = '<option value="">Choose a delivery partner</option>' +
     deliveryPartners.map(partner => `<option value="${partner.id}">${escapeHtml(partner.fullName)}</option>`).join('');
+}
+
+function initializeProfitabilityDates() {
+  const today = getLocalDateValue();
+  document.querySelector('#profit-date').value = today;
+  document.querySelector('#rfa-from-date').value = `${today.slice(0, 7)}-01`;
+  document.querySelector('#rfa-to-date').value = today;
+}
+
+function showProfitabilityTab(tab) {
+  const showRfa = tab === 'rfa';
+  document.querySelector('#profitability-sku-report').hidden = showRfa;
+  document.querySelector('#profitability-rfa-report').hidden = !showRfa;
+  document.querySelector('#profitability-sku-tab-button').classList.toggle('active', !showRfa);
+  document.querySelector('#profitability-rfa-tab-button').classList.toggle('active', showRfa);
+  document.querySelector('#profitability-sku-tab-button').setAttribute('aria-selected', String(!showRfa));
+  document.querySelector('#profitability-rfa-tab-button').setAttribute('aria-selected', String(showRfa));
+  if (showRfa) loadRfaReport();
+}
+
+function renderRfaReport(report) {
+  document.querySelector('#rfa-report-total').textContent = formatCurrency(report.totalNetRfa);
+  document.querySelector('#rfa-report-date').textContent =
+    `RFA from ${formatDate(report.fromDate)} to ${formatDate(report.toDate)}`;
+  const rows = document.querySelector('#rfa-report-rows');
+  rows.innerHTML = report.rows.map(row => `<tr>
+    <td data-label="Category">${escapeHtml(row.category)}</td>
+    <td data-label="Net RFA due">${formatCurrency(row.netRfa)}</td>
+  </tr>`).join('');
+  document.querySelector('#rfa-report-empty').hidden = report.rows.length > 0;
+}
+
+async function loadRfaReport() {
+  const fromDate = document.querySelector('#rfa-from-date').value;
+  const toDate = document.querySelector('#rfa-to-date').value;
+  const errorElement = document.querySelector('#rfa-report-error');
+  errorElement.hidden = true;
+  if (!fromDate || !toDate) {
+    errorElement.textContent = 'Choose both a from date and a to date.';
+    errorElement.hidden = false;
+    return;
+  }
+  if (fromDate > toDate) {
+    errorElement.textContent = 'The from date must be on or before the to date.';
+    errorElement.hidden = false;
+    return;
+  }
+  try {
+    const query = new URLSearchParams({ fromDate, toDate });
+    renderRfaReport(await requestJson(`/api/profitability/rfa-report?${query}`));
+  } catch (error) {
+    errorElement.textContent = error.message;
+    errorElement.hidden = false;
+  }
+}
+
+function renderProfitabilityReport(report) {
+  const { summary, items, excludedItems = [] } = report;
+  const missingCosts = summary.missingCostItems.length > 0 || summary.missingQuantityItems.length > 0;
+  document.querySelector('#profit-gross').textContent = formatCurrency(summary.grossAmount);
+  document.querySelector('#profit-cogs').textContent = missingCosts ? 'Incomplete' : formatCurrency(summary.cogs);
+  document.querySelector('#profit-without-rfa').textContent = missingCosts ? 'Incomplete' : formatCurrency(summary.netProfitWithoutRfa);
+  document.querySelector('#profit-with-rfa').textContent = missingCosts ? 'Incomplete' : formatCurrency(summary.netProfitWithRfa);
+  document.querySelector('#profit-rfa').textContent = formatCurrency(summary.rfaAmount);
+  document.querySelector('#profit-output-gst').textContent = formatCurrency(summary.outputTax);
+  document.querySelector('#profit-input-gst').textContent = missingCosts ? 'Incomplete' : formatCurrency(summary.inputGst);
+  document.querySelector('#profit-gst-payable').textContent = missingCosts ? 'Incomplete' : formatCurrency(summary.gstPayable);
+
+  const warning = document.querySelector('#profitability-warning');
+  const warningMessages = [];
+  if (missingCosts) {
+    if (summary.missingCostItems.length) {
+      warningMessages.push(`Profit is incomplete because no backend purchase cost matched these items: ${summary.missingCostItems.join(', ')}.`);
+    }
+    if (summary.missingQuantityItems.length) {
+      warningMessages.push(`Purchase cost cannot be calculated for these sales lines because both invoice quantity and sales return quantity are zero: ${summary.missingQuantityItems.join(', ')}.`);
+    }
+  }
+  if (excludedItems.length) {
+    warningMessages.push(`Excluded from this date's report: ${excludedItems.join(', ')}.`);
+  }
+  warning.hidden = warningMessages.length === 0;
+  warning.textContent = warningMessages.join(' ');
+
+  const rows = document.querySelector('#profitability-rows');
+  rows.innerHTML = items.map(item => {
+    return `<tr>
+    <td data-label="Bill No.">${escapeHtml(item.billNo)}</td>
+    <td data-label="SKU Code">${escapeHtml(item.itemCode || '—')}</td>
+    <td data-label="SKU Name">${escapeHtml(item.itemName || '—')}</td>
+    <td data-label="Net purchase cost · pre-tax">${item.missingQuantity ? 'Qty unavailable' : item.missingCost ? 'Cost missing' : formatCurrency(item.purchaseCost)}</td>
+    <td data-label="Net selling cost · pre-tax">${formatCurrency(item.netSellingCost)}</td>
+    <td data-label="GST payable">${item.missingQuantity ? 'Qty unavailable' : item.missingCost ? 'Cost missing' : formatCurrency(item.gstPayable)}</td>
+    <td data-label="Net margin before RFA">${item.missingQuantity ? 'Qty unavailable' : item.missingCost ? 'Cost missing' : item.netMarginBeforeRfa === null ? '—' : `${item.netMarginBeforeRfa.toFixed(2)}%`}</td>
+    <td data-label="RFA amount">${formatCurrency(item.rfaAmount)}</td>
+    <td data-label="Net margin after RFA">${item.missingQuantity ? 'Qty unavailable' : item.missingCost ? 'Cost missing' : item.netMarginAfterRfa === null ? '—' : `${item.netMarginAfterRfa.toFixed(2)}%`}</td>
+    </tr>`;
+  }).join('');
+  document.querySelector('#profitability-empty').hidden = items.length > 0;
+}
+
+async function loadProfitabilityReport() {
+  const selectedDate = document.querySelector('#profit-date').value;
+  const errorElement = document.querySelector('#profitability-error');
+  errorElement.hidden = true;
+  if (!selectedDate) {
+    errorElement.textContent = 'Choose a valid profitability date.';
+    errorElement.hidden = false;
+    return;
+  }
+
+  try {
+    const query = new URLSearchParams({ date: selectedDate });
+    const report = await requestJson(`/api/profitability/report?${query}`);
+    renderProfitabilityReport(report);
+  } catch (error) {
+    errorElement.textContent = error.message;
+    errorElement.hidden = false;
+  }
+}
+
+async function uploadProfitabilityFile(file) {
+  if (!file) return;
+  const input = document.querySelector('#profit-sales-file');
+  const button = document.querySelector('#import-profit-sales');
+  const status = document.querySelector('#profit-sales-status');
+  const selectedDate = document.querySelector('#profit-date').value;
+  if (!selectedDate) {
+    status.textContent = 'Choose a profitability date before uploading.';
+    status.classList.add('error');
+    input.value = '';
+    return;
+  }
+  status.textContent = 'Uploading…';
+  status.classList.remove('error');
+  button.disabled = true;
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('deliveryDate', selectedDate);
+    const result = await requestJson('/api/profitability/sales', {
+      method: 'POST',
+      body: formData
+    });
+    status.textContent = result.message;
+    await loadProfitabilityReport();
+    await loadRfaReport();
+  } catch (error) {
+    status.textContent = error.message;
+    status.classList.add('error');
+  } finally {
+    button.disabled = false;
+    input.value = '';
+  }
+}
+
+async function uploadProfitabilityCostsFile(file) {
+  if (!file) return;
+  const input = document.querySelector('#profit-costs-file');
+  const button = document.querySelector('#import-profit-costs');
+  const status = document.querySelector('#profit-costs-status');
+  status.textContent = 'Uploading…';
+  status.classList.remove('error');
+  button.disabled = true;
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    const result = await requestJson('/api/profitability/product-costs', {
+      method: 'POST',
+      body: formData
+    });
+    status.textContent = result.message;
+    await loadProfitabilityReport();
+  } catch (error) {
+    status.textContent = error.message;
+    status.classList.add('error');
+  } finally {
+    button.disabled = false;
+    input.value = '';
+  }
+}
+
+function showDashboardPage(page) {
+  const isProfitability = page === 'profitability' && currentUser?.role === 'admin';
+  document.querySelector('#overview').hidden = isProfitability;
+  document.querySelector('#profitability').hidden = !isProfitability;
+  document.querySelector('.day-picker').hidden = isProfitability;
+  exportButton.hidden = isProfitability || currentUser?.role === 'delivery_partner';
+  document.querySelector('.breadcrumbs strong').textContent = isProfitability ? 'Profitability' : 'Deliveries';
+  document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
+    const isActive = isProfitability
+    ? link.id === 'profitability-link'
+    : link.id === 'deliveries-link';
+    link.classList.toggle('active', isActive);
+    if (isActive) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  });
 }
 
 function updateSalesmanOptions() {
@@ -999,11 +1209,40 @@ document.querySelector('#dashboard-date').addEventListener('change', event => {
   renderRows();
   if (damageDialog.open) loadDamageReports();
 });
+document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
+  link.addEventListener('click', event => {
+    event.preventDefault();
+    const page = link.id === 'profitability-link' ? 'profitability' : 'deliveries';
+    if (page === 'profitability' && currentUser?.role !== 'admin') return;
+    showDashboardPage(page);
+    if (page === 'profitability') loadProfitabilityReport();
+  });
+});
+document.querySelector('#import-profit-sales').addEventListener('click', () => {
+  document.querySelector('#profit-sales-file').click();
+});
+document.querySelector('#profit-sales-file').addEventListener('change', event => {
+  uploadProfitabilityFile(event.currentTarget.files[0]);
+});
+document.querySelector('#import-profit-costs').addEventListener('click', () => {
+  document.querySelector('#profit-costs-file').click();
+});
+document.querySelector('#profit-costs-file').addEventListener('change', event => {
+  uploadProfitabilityCostsFile(event.currentTarget.files[0]);
+});
+document.querySelector('#profit-date').addEventListener('change', () => {
+  loadProfitabilityReport();
+});
+document.querySelector('#profitability-sku-tab-button').addEventListener('click', () => showProfitabilityTab('sku'));
+document.querySelector('#profitability-rfa-tab-button').addEventListener('click', () => showProfitabilityTab('rfa'));
+document.querySelector('#rfa-from-date').addEventListener('change', loadRfaReport);
+document.querySelector('#rfa-to-date').addEventListener('change', loadRfaReport);
 exportButton.addEventListener('click', exportSelectedDay);
 async function initializeDashboard() {
   await loadCurrentUser();
   await loadDeliveryPartners();
   await loadDeliveries();
+  if (currentUser.role === 'admin') await loadProfitabilityReport();
   window.setInterval(refreshDashboard, 5000);
 }
 

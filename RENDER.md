@@ -65,3 +65,83 @@ implicit TLS; other ports use the normal SMTP connection with Nodemailer authent
 Delivery agents can submit an RT number and damaged-stock photo from the dashboard.
 Reports are permanent and cannot be deleted through the app. They are shown to the
 whole workspace, including managers, filtered by the dashboard's selected date.
+
+## Admin profitability report
+
+The admin-only Profitability tab imports only the sales rows matching the selected
+date. It reads `Invoice Qty` and optional `Sales Return Qty`, pre-tax `Gross
+Amount`, `Total Discount` as the RFA claim, `Tax Group Amount` as output GST,
+and `Category` (also accepts the source register's `Cagetory` spelling).
+Sales return quantity is subtracted from invoice quantity for purchase-cost
+calculation; the register should provide return amounts and tax as negative
+values. Reimporting a date replaces that date's profitability sales rows without
+changing other dates or delivery records.
+
+Product costs can be uploaded from the admin Profitability tab using the purchase
+price list CSV or Excel workbook. For the purchase file format, the importer finds
+the worksheet containing the purchase data and then finds the header row. If
+multiple worksheets contain purchase rows, the upload is rejected with their
+names so the intended worksheet can be uploaded by itself. It reads `Product
+Code`/`Item Code`, `Product Name`/`Product Description`, `Invoice Date`,
+`Invoice Ref. No.`, `Original PTS` (preferred; `NET PTS` is only a fallback),
+`Inv Disc%`, and GST-rate columns. It picks the newest invoice date per product
+code, breaking same-date ties by the highest invoice reference. It calculates
+pre-tax per-piece cost as
+`Original PTS × (1 − Inv Disc% / 100)` and applies combined SGST/CGST (or IGST) to
+calculate the GST-inclusive purchase price. The pre-tax cost and GST rate are
+stored separately for profitability and input-GST estimates. The
+importer also accepts `Item Code`, `Item Name`, `GST Percentage`, and `Net Price
+per PC Including GST` by removing GST from the inclusive price. New SKUs are
+added, existing SKUs are updated, and SKUs absent from an upload are left
+unchanged. Each SKU should occur once per file. The simpler `SKU` plus pre-tax
+`Purchase Price` file format is also accepted; when that format updates an
+existing SKU, its GST rate is preserved, while a new SKU defaults to 0% input
+GST. To manage costs directly in the database instead, load one cost row per
+product into
+`profitability_product_costs`, scoped to its workspace:
+
+- `company_id`: the workspace ID from `companies`.
+- `item_code`: the sales register's Item Code (preferred); use an empty string to
+  match by item name instead.
+- `item_name`: the sales register's Item Name.
+- `purchase_unit_cost`: current pre-tax purchase cost for one unit.
+- `input_gst_rate`: input GST percentage for that unit cost (for example, `18`).
+
+For example, after connecting to the correct local or persistent Render database:
+
+```sql
+INSERT INTO profitability_product_costs
+  (company_id, item_code, item_name, purchase_unit_cost, input_gst_rate)
+SELECT id, 'SKU-001', 'Example Product', 100.00, 18
+FROM companies
+WHERE name = 'Your Workspace'
+ON CONFLICT (company_id, item_code, item_name) DO UPDATE SET
+  purchase_unit_cost = excluded.purchase_unit_cost,
+  input_gst_rate = excluded.input_gst_rate,
+  updated_at = CURRENT_TIMESTAMP;
+```
+
+The report matches by item code first and falls back to name only for cost rows
+whose item code is blank. It estimates cost of goods sold and input GST for the
+quantity sold that day. The selected-date report displays a row per bill and SKU
+with pre-tax net purchase cost, net selling cost (pre-tax gross sales), GST
+payable, margin before RFA, RFA amount, and margin after RFA. Profit amounts use
+`pre-tax selling cost - pre-tax purchase cost`; input GST is calculated
+separately and excluded from profit. Margin percentages use GST-inclusive
+purchase cost (`pre-tax unit cost + input GST`) × net quantity as the denominator.
+Margin before RFA is `profit before RFA / GST-inclusive purchase cost`; margin
+after RFA includes RFA in profit and uses the same denominator. GST payable is
+output GST less estimated input GST.
+Verify tax-credit eligibility and final tax
+calculations with your accountant.
+For the local workspace, SKUs `PFDSO0544` and `12863` are excluded from the
+2026-10-06 report only, as specifically requested; they remain included on other
+report dates. Zero-invoice-quantity sales returns are included when a
+`Sales Return Qty` column is present; reimport dates previously uploaded without
+that field to populate their return quantities.
+Product costs must be loaded separately into the local and hosted databases.
+The Net RFA Due from Company tab has independent From and To date filters. It
+groups `Total Discount` as net RFA by product category across the selected
+inclusive period and displays the period total. Negative discounts on sales
+returns reduce the RFA due. The shared profitability report date remains
+dedicated to SKU profitability and the sales-register upload.
