@@ -80,6 +80,16 @@ async function initDb() {
       output_tax REAL NOT NULL DEFAULT 0,
       UNIQUE (company_id, sales_date, bill_no, item_code, item_name)
     );
+    CREATE TABLE IF NOT EXISTS at_stock_daily (
+      company_id INTEGER NOT NULL,
+      stock_date TEXT NOT NULL,
+      sales_category TEXT NOT NULL CHECK (sales_category IN ('AT', 'BC')),
+      item_code TEXT NOT NULL DEFAULT '',
+      item_name TEXT NOT NULL,
+      opening_qty REAL,
+      purchase_qty REAL NOT NULL DEFAULT 0,
+      PRIMARY KEY (company_id, stock_date, sales_category, item_code, item_name)
+    );
 
     CREATE TABLE IF NOT EXISTS profitability_product_costs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -245,6 +255,10 @@ async function initDb() {
   }
 
   const billColumns = await db.all('PRAGMA table_info(bills)');
+  const atStockColumns = await db.all('PRAGMA table_info(at_stock_daily)');
+  if (!atStockColumns.some(column => column.name === 'assigned')) {
+    await db.exec('ALTER TABLE at_stock_daily ADD COLUMN assigned INTEGER NOT NULL DEFAULT 0');
+  }
   const billItemColumns = await db.all('PRAGMA table_info(bill_items)');
   if (!billItemColumns.some(column => column.name === 'return_type')) {
     await db.exec("ALTER TABLE bill_items ADD COLUMN return_type TEXT NOT NULL DEFAULT ''");

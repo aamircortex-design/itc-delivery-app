@@ -334,7 +334,9 @@ async function loadCurrentUser() {
   document.querySelector('#top-profile-avatar').textContent = initial;
   document.querySelector('#top-profile-avatar').setAttribute('aria-label', `Sign out ${user.fullName}`);
   document.querySelector('#user-management-link').hidden = user.role !== 'admin';
-  document.querySelector('#profitability-link').hidden = user.role !== 'admin';
+  document.querySelector('#profitability-link').hidden = user.role === 'delivery_partner';
+  document.querySelector('#at-stock-link').hidden = !['admin', 'manager'].includes(user.role);
+  document.querySelector('#at-assignment-link').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#open-upload').hidden = user.role === 'delivery_partner';
   document.querySelector('#download-template').hidden = user.role === 'delivery_partner';
   document.querySelector('#modal-template').hidden = user.role === 'delivery_partner';
@@ -364,6 +366,7 @@ async function loadCurrentUser() {
       : 'View orders and update delivery progress for the selected day.';
   document.querySelector('#empty-upload').hidden = user.role === 'delivery_partner';
   initializeProfitabilityDates();
+  initializeAtStockInterface();
   showDashboardPage('deliveries');
   renderRows();
 }
@@ -385,15 +388,247 @@ function initializeProfitabilityDates() {
   document.querySelector('#rfa-to-date').value = today;
 }
 
+function initializeAtStockInterface() {
+  if (document.querySelector('#profitability-at-stock-report')) return;
+
+  const panel = document.createElement('section');
+  panel.className = 'profitability-panel at-stock-report';
+  panel.id = 'profitability-at-stock-report';
+  panel.hidden = true;
+  panel.innerHTML = `
+    <div class="at-stock-heading">
+      <div><h3>AT stock</h3><p id="at-stock-date-label"></p></div>
+      <button class="button button-primary" id="save-at-stock" type="button">Save stock changes</button>
+    </div>
+    <div class="dialog-error" id="at-stock-error" role="alert" hidden></div>
+    <div class="at-stock-table-wrap">
+      <table class="at-stock-table">
+        <thead><tr><th>Category</th><th>Product</th><th>Opening</th><th>Sales</th><th>Sales return</th><th>Purchase</th><th>Closing</th><th>Assigned</th></tr></thead>
+        <tbody id="at-stock-rows"></tbody>
+      </table>
+    </div>
+    <p class="at-stock-empty" id="at-stock-empty" hidden>No AT or BC products are available. Upload a sales register to populate this list.</p>
+    <p class="at-stock-note">AT quantities use 30 kg stock bags and loose packs; pack weight is read from the item name. BC quantities are in pieces. Sales and sales returns update from the uploaded sales register.</p>
+    <p class="at-stock-save-status" id="at-stock-save-status" role="status"></p>`;
+  const controls = document.querySelector('.profitability-controls');
+  controls.insertAdjacentElement('afterend', panel);
+  document.querySelector('#save-at-stock').addEventListener('click', saveAtStock);
+  document.querySelector('#at-stock-rows').addEventListener('click', toggleAtAssigned);
+
+  const assignment = document.createElement('section');
+  assignment.className = 'profitability-panel at-assignment-report';
+  assignment.id = 'profitability-at-assignment-report';
+  assignment.hidden = true;
+  assignment.innerHTML = `
+    <div class="at-stock-heading">
+      <div><h3>AT assignment by delivery agent</h3><p id="at-assignment-date-label"></p></div>
+    </div>
+    <div class="dialog-error" id="at-assignment-error" role="alert" hidden></div>
+    <div id="at-assignment-agents"></div>
+    <p class="at-stock-empty" id="at-assignment-empty" hidden>No AT sales are available for this date.</p>
+    <p class="at-stock-note">Quantities come from the uploaded sales register and follow the delivery assignments made under Deliveries. Bags are 30 kg each.</p>`;
+  panel.insertAdjacentElement('afterend', assignment);
+}
+
+async function toggleAtAssigned(event) {
+  const button = event.target.closest('[data-stock-assigned]');
+  if (!button) return;
+  const row = button.closest('tr');
+  const assigned = button.dataset.stockAssigned !== '1';
+  button.disabled = true;
+  try {
+    const date = document.querySelector('#profit-date').value;
+    await requestJson(`/api/profitability/at-stock/${encodeURIComponent(date)}/assigned`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        category: row.dataset.stockCategory,
+        itemCode: row.dataset.stockCode,
+        itemName: row.dataset.stockName,
+        assigned
+      })
+    });
+    button.dataset.stockAssigned = assigned ? '1' : '0';
+    button.classList.toggle('is-assigned', assigned);
+    button.setAttribute('aria-pressed', String(assigned));
+    button.textContent = assigned ? 'Assigned ✓' : 'Assigned';
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function loadAtAssignmentReport() {
+  const selectedDate = document.querySelector('#profit-date').value;
+  const errorElement = document.querySelector('#at-assignment-error');
+  errorElement.hidden = true;
+  if (!selectedDate) return;
+  try {
+    const report = await requestJson(`/api/profitability/at-assignment?${new URLSearchParams({ date: selectedDate })}`);
+    document.querySelector('#at-assignment-date-label').textContent = `Sales for ${formatDate(report.date)}`;
+    document.querySelector('#at-assignment-empty').hidden = report.agents.length > 0;
+    document.querySelector('#at-assignment-agents').innerHTML = report.agents.map(agent => `
+      <article class="at-assignment-agent">
+        <h4>${escapeHtml(agent.agentName)}</h4>
+        <table class="at-stock-table">
+          <thead><tr><th>Atta</th><th>Quantity</th><th>Bills</th></tr></thead>
+          <tbody>${agent.items.map(item => `<tr>
+            <td data-label="Atta" title="${escapeHtml(item.itemName)}">${escapeHtml(item.displayName)}</td>
+            <td data-label="Quantity">${item.packWeightKg
+              ? formatAtStockQuantity(item.quantity * item.packWeightKg, item.packWeightKg)
+              : `${formatStockNumber(item.quantity)} pcs`}</td>
+            <td data-label="Bills">${item.billCount}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </article>`).join('');
+  } catch (error) {
+    errorElement.textContent = error.message;
+    errorElement.hidden = false;
+  }
+}
+
 function showProfitabilityTab(tab) {
-  const showRfa = tab === 'rfa';
-  document.querySelector('#profitability-sku-report').hidden = showRfa;
-  document.querySelector('#profitability-rfa-report').hidden = !showRfa;
-  document.querySelector('#profitability-sku-tab-button').classList.toggle('active', !showRfa);
-  document.querySelector('#profitability-rfa-tab-button').classList.toggle('active', showRfa);
-  document.querySelector('#profitability-sku-tab-button').setAttribute('aria-selected', String(!showRfa));
-  document.querySelector('#profitability-rfa-tab-button').setAttribute('aria-selected', String(showRfa));
-  if (showRfa) loadRfaReport();
+  const activeTab = tab === 'rfa' ? 'rfa' : 'sku';
+  document.querySelector('#profitability-sku-report').hidden = activeTab !== 'sku';
+  document.querySelector('#profitability-rfa-report').hidden = activeTab !== 'rfa';
+  document.querySelector('#profitability-sku-tab-button').classList.toggle('active', activeTab === 'sku');
+  document.querySelector('#profitability-rfa-tab-button').classList.toggle('active', activeTab === 'rfa');
+  document.querySelector('#profitability-sku-tab-button').setAttribute('aria-selected', String(activeTab === 'sku'));
+  document.querySelector('#profitability-rfa-tab-button').setAttribute('aria-selected', String(activeTab === 'rfa'));
+  if (activeTab === 'rfa') loadRfaReport();
+}
+
+function formatStockNumber(value) {
+  return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(value);
+}
+
+function getBagAndPieceCounts(quantityKg, packWeightKg) {
+  const bags = Math.trunc((quantityKg + Number.EPSILON) / 30);
+  const loosePieces = Math.round((quantityKg - bags * 30) / packWeightKg);
+  return { bags, loosePieces };
+}
+
+function formatAtStockQuantity(quantityKg, packWeightKg) {
+  if (!packWeightKg) return 'Pack size missing';
+  const { bags, loosePieces } = getBagAndPieceCounts(quantityKg, packWeightKg);
+  return `${formatStockNumber(bags)} bags, ${formatStockNumber(loosePieces)} pcs`;
+}
+
+function renderStockEntryInputs(row, field, baseQuantity, editable) {
+  const disabled = !editable || (row.category === 'AT' && !row.packWeightKg);
+  if (row.category === 'BC') {
+    return `<label class="at-stock-input"><span class="visually-hidden">${field} pieces for ${escapeHtml(row.itemName)}</span>
+      <input type="number" min="0" step="any" data-stock-${field}-pcs value="${formatStockNumber(baseQuantity)}" ${disabled ? 'disabled' : ''}>
+      <span>pcs</span></label>`;
+  }
+  if (!row.packWeightKg) return '<span class="at-stock-missing-pack">Add kg pack size to item name</span>';
+  const count = getBagAndPieceCounts(baseQuantity, row.packWeightKg);
+  return `<div class="at-stock-units">
+    <label class="at-stock-input"><span class="visually-hidden">${field} 30 kg bags for ${escapeHtml(row.itemName)}</span>
+      <input type="number" min="0" step="any" data-stock-${field}-bags value="${formatStockNumber(count.bags)}" ${disabled ? 'disabled' : ''}>
+      <span>bags</span></label>
+    <label class="at-stock-input"><span class="visually-hidden">${field} pieces for ${escapeHtml(row.itemName)}</span>
+      <input type="number" min="0" step="any" data-stock-${field}-pcs value="${formatStockNumber(count.loosePieces)}" ${disabled ? 'disabled' : ''}>
+      <span>pcs</span></label>
+  </div>`;
+}
+
+function renderAtStockReport(report) {
+  const canEditOpening = currentUser?.role === 'admin';
+  const canEditPurchases = ['admin', 'manager'].includes(currentUser?.role);
+  const missingPackNames = report.rows
+    .filter(row => row.category === 'AT' && !row.packWeightKg)
+    .map(row => row.itemName);
+  const rows = report.rows.map(row => `<tr data-stock-category="${escapeHtml(row.category)}"
+    data-stock-code="${escapeHtml(row.itemCode)}" data-stock-name="${escapeHtml(row.itemName)}"
+    data-stock-pack-weight="${row.packWeightKg || ''}">
+    <td data-label="Category">${escapeHtml(row.category)}</td>
+    <td data-label="Product" title="${escapeHtml(row.itemName)}">${escapeHtml(row.displayName || row.itemName)}</td>
+    <td data-label="Opening">${renderStockEntryInputs(row, 'opening', row.openingQty, canEditOpening)}</td>
+    <td data-label="Sales">${row.category === 'AT' ? formatAtStockQuantity(row.salesQty, row.packWeightKg) : `${formatStockNumber(row.salesQty)} pcs`}</td>
+    <td data-label="Sales return">${row.category === 'AT' ? formatAtStockQuantity(row.returnQty, row.packWeightKg) : `${formatStockNumber(row.returnQty)} pcs`}</td>
+    <td data-label="Purchase">${renderStockEntryInputs(row, 'purchase', row.purchaseQty, canEditPurchases)}</td>
+    <td data-label="Closing">${row.category === 'AT' ? formatAtStockQuantity(row.closingQty, row.packWeightKg) : `${formatStockNumber(row.closingQty)} pcs`}</td>
+    <td data-label="Assigned"><button class="button at-stock-assigned${row.assigned ? ' is-assigned' : ''}" type="button" data-stock-assigned="${row.assigned ? '1' : '0'}" aria-pressed="${row.assigned}">${row.assigned ? 'Assigned ✓' : 'Assigned'}</button></td>
+  </tr>`).join('');
+  document.querySelector('#at-stock-rows').innerHTML = rows;
+  document.querySelector('#at-stock-empty').hidden = report.rows.length > 0;
+  document.querySelector('#at-stock-date-label').textContent = `Stock for ${formatDate(report.date)}`;
+  document.querySelector('#save-at-stock').hidden = !canEditOpening && !canEditPurchases;
+  document.querySelector('#save-at-stock').disabled = false;
+  const errorElement = document.querySelector('#at-stock-error');
+  errorElement.hidden = missingPackNames.length === 0;
+  errorElement.textContent = missingPackNames.length
+    ? `AT item names need a pack size such as 1 kg, 5 kg, or 10 kg: ${missingPackNames.join(', ')}.`
+    : '';
+  document.querySelector('#at-stock-save-status').textContent = '';
+  document.querySelector('#at-stock-save-status').classList.remove('error');
+}
+
+async function loadAtStockReport() {
+  const selectedDate = document.querySelector('#profit-date').value;
+  const errorElement = document.querySelector('#at-stock-error');
+  errorElement.hidden = true;
+  if (!selectedDate) {
+    errorElement.textContent = 'Choose a valid stock date.';
+    errorElement.hidden = false;
+    return;
+  }
+  try {
+    const query = new URLSearchParams({ date: selectedDate });
+    renderAtStockReport(await requestJson(`/api/profitability/at-stock?${query}`));
+  } catch (error) {
+    errorElement.textContent = error.message;
+    errorElement.hidden = false;
+  }
+}
+
+async function saveAtStock() {
+  const rows = [...document.querySelectorAll('#at-stock-rows tr[data-stock-category]')];
+  const entries = rows.filter(row => row.dataset.stockCategory !== 'AT' || Number(row.dataset.stockPackWeight) > 0).map(row => {
+    const category = row.dataset.stockCategory;
+    const weight = Number(row.dataset.stockPackWeight);
+    const readInput = selector => {
+      const value = row.querySelector(selector).value;
+      return value === '' ? NaN : Number(value);
+    };
+    const getQuantity = field => category === 'AT'
+      ? readInput(`[data-stock-${field}-bags]`) * 30 +
+        readInput(`[data-stock-${field}-pcs]`) * weight
+      : readInput(`[data-stock-${field}-pcs]`);
+    return {
+      category,
+      itemCode: row.dataset.stockCode,
+      itemName: row.dataset.stockName,
+      openingQty: currentUser.role === 'admin' ? getQuantity('opening') : null,
+      purchaseQty: getQuantity('purchase')
+    };
+  });
+  if (!entries.length) {
+    document.querySelector('#at-stock-save-status').textContent = 'There are no stock rows to save.';
+    return;
+  }
+  const status = document.querySelector('#at-stock-save-status');
+  const button = document.querySelector('#save-at-stock');
+  button.disabled = true;
+  status.textContent = 'Saving...';
+  status.classList.remove('error');
+  try {
+    const date = document.querySelector('#profit-date').value;
+    const result = await requestJson(`/api/profitability/at-stock/${encodeURIComponent(date)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries })
+    });
+    showToast(result.message);
+    await loadAtStockReport();
+  } catch (error) {
+    status.textContent = error.message;
+    status.classList.add('error');
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function renderRfaReport(report) {
@@ -559,16 +794,46 @@ async function uploadProfitabilityCostsFile(file) {
 }
 
 function showDashboardPage(page) {
-  const isProfitability = page === 'profitability' && currentUser?.role === 'admin';
-  document.querySelector('#overview').hidden = isProfitability;
-  document.querySelector('#profitability').hidden = !isProfitability;
-  document.querySelector('.day-picker').hidden = isProfitability;
-  exportButton.hidden = isProfitability || currentUser?.role === 'delivery_partner';
-  document.querySelector('.breadcrumbs strong').textContent = isProfitability ? 'Profitability' : 'Deliveries';
+  const isAdmin = currentUser?.role === 'admin';
+  const isAtStock = page === 'at-stock' && ['admin', 'manager'].includes(currentUser?.role);
+  const isAtAssignment = page === 'at-assignment' && ['admin', 'manager'].includes(currentUser?.role);
+  const isProfitability = page === 'profitability' && isAdmin;
+  const isAtArea = isAtStock || isAtAssignment;
+  const isProfitabilityArea = isProfitability || isAtArea;
+  document.querySelector('#overview').hidden = isProfitabilityArea;
+  document.querySelector('#profitability').hidden = !isProfitabilityArea;
+  document.querySelector('#profitability-at-stock-report').hidden = !isAtStock;
+  document.querySelector('#profitability-at-assignment-report').hidden = !isAtAssignment;
+  document.querySelector('.profitability-tabs').hidden = isAtArea;
+  document.querySelector('#profitability-sku-report').hidden = isAtArea;
+  document.querySelector('#profitability-rfa-report').hidden = isAtArea;
+  document.querySelector('.day-picker').hidden = isProfitabilityArea;
+  exportButton.hidden = isProfitabilityArea || currentUser?.role === 'delivery_partner';
+  document.querySelector('.breadcrumbs strong').textContent =
+    isAtAssignment ? 'Profitability / AT Assignment' : isAtStock ? 'Profitability / AT Stock' : isProfitability ? 'Profitability' : 'Deliveries';
+  const profitabilityHeading = document.querySelector('#profitability .page-heading h1');
+  profitabilityHeading.innerHTML = isAtAssignment ? 'AT Assignment <span>by agent.</span>' : isAtStock ? 'AT Stock <span>management.</span>' : 'Profitability <span>reports.</span>';
+  document.querySelector('#profitability .page-heading .eyebrow').innerHTML = isAtArea
+    ? '<span class="eyebrow-dot"></span> INVENTORY MANAGEMENT'
+    : '<span class="eyebrow-dot"></span> ADMIN ONLY · FINANCIAL REPORTING';
+  document.querySelector('#profitability .page-heading .page-subtitle').textContent = isAtAssignment
+    ? 'See which delivery agent needs which atta, based on the sales register and Deliveries assignments.'
+    : isAtStock
+    ? 'Track opening stock, sales, returns, purchases, and closing stock for AT and BC products.'
+    : 'Review SKU profitability and net RFA due from the company.';
+  document.querySelector('.profitability-date-help').textContent = isAtArea
+    ? 'Select the date for the stock balance.'
+    : 'This date applies to SKU profitability and the sales-register upload.';
   document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
-    const isActive = isProfitability
-    ? link.id === 'profitability-link'
-    : link.id === 'deliveries-link';
+    const isActive = link.id === 'profitability-link'
+      ? isProfitability
+      : link.id === 'at-assignment-link'
+        ? isAtAssignment
+      : link.id === 'at-stock-link'
+        ? isAtStock
+        : link.id === 'deliveries-link'
+          ? !isProfitabilityArea
+          : false;
     link.classList.toggle('active', isActive);
     if (isActive) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
@@ -1351,10 +1616,19 @@ document.querySelector('#dashboard-date').addEventListener('change', event => {
 document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
   link.addEventListener('click', event => {
     event.preventDefault();
-    const page = link.id === 'profitability-link' ? 'profitability' : 'deliveries';
+    let page = link.id === 'at-assignment-link' ? 'at-assignment'
+      : link.id === 'at-stock-link' ? 'at-stock'
+      : link.id === 'profitability-link' ? 'profitability' : 'deliveries';
+    if (page === 'profitability' && currentUser?.role === 'manager') page = 'at-stock';
     if (page === 'profitability' && currentUser?.role !== 'admin') return;
+    if (['at-stock', 'at-assignment'].includes(page) && !['admin', 'manager'].includes(currentUser?.role)) return;
     showDashboardPage(page);
-    if (page === 'profitability') loadProfitabilityReport();
+    if (page === 'profitability') {
+      showProfitabilityTab('sku');
+      loadProfitabilityReport();
+    }
+    if (page === 'at-stock') loadAtStockReport();
+    if (page === 'at-assignment') loadAtAssignmentReport();
   });
 });
 document.querySelector('#import-profit-sales').addEventListener('click', () => {
@@ -1370,7 +1644,13 @@ document.querySelector('#profit-costs-file').addEventListener('change', event =>
   uploadProfitabilityCostsFile(event.currentTarget.files[0]);
 });
 document.querySelector('#profit-date').addEventListener('change', () => {
-  loadProfitabilityReport();
+  if (!document.querySelector('#profitability-at-stock-report').hidden) {
+    loadAtStockReport();
+  } else if (!document.querySelector('#profitability-at-assignment-report').hidden) {
+    loadAtAssignmentReport();
+  } else if (currentUser?.role === 'admin') {
+    loadProfitabilityReport();
+  }
 });
 document.querySelector('#profitability-sku-tab-button').addEventListener('click', () => showProfitabilityTab('sku'));
 document.querySelector('#profitability-rfa-tab-button').addEventListener('click', () => showProfitabilityTab('rfa'));

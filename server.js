@@ -76,6 +76,28 @@ function getSessionTokenHash(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+function getAtPackWeightKg(itemName) {
+  const name = String(itemName).replace(/O(?=[.,]\d)/gi, '0');
+  const kgMatch = name.match(/(\d+(?:[.,]\d+)?)\s*(?:kgs?|kilograms?)/i);
+  const gramMatch = name.match(/(\d+(?:[.,]\d+)?)\s*g(?![a-z])/i);
+  if (!kgMatch && !gramMatch) return null;
+  const weight = kgMatch
+    ? Number(kgMatch[1].replace(',', '.'))
+    : Number(gramMatch[1].replace(',', '.')) / 1000;
+  return Number.isFinite(weight) && weight > 0 && weight <= 30 ? weight : null;
+}
+
+function getAtDisplayName(itemName, packWeightKg) {
+  const name = String(itemName).toUpperCase();
+  const variants = [
+    [/MULTIGRAIN/, 'MULTIGRAINS'], [/SELECT/, 'SELECT'], [/RAGI/, 'RAGI'],
+    [/MILLETS/, 'MILLETS'], [/SUPERIOR/, 'SUPERIOR MP'], [/MPATTA/, 'MP']
+  ];
+  const variant = variants.find(([pattern]) => pattern.test(name))?.[1];
+  const size = !packWeightKg ? '' : packWeightKg < 1 ? `${Math.round(packWeightKg * 1000)}G` : `${packWeightKg}KG`;
+  return ['ATTA', variant, size].filter(Boolean).join(' ');
+}
+
 function setSessionCookie(res, token) {
   res.cookie(sessionCookieName, token, {
     httpOnly: true,
@@ -1589,6 +1611,257 @@ app.post('/api/profitability/product-costs', upload.single('file'), async (req, 
     if (error.message.startsWith('Row ')) return res.status(400).json({ error: error.message });
     console.error('Could not import profitability product costs:', error);
     res.status(500).json({ error: 'Could not import SKU purchase costs. Please check the file and try again.' });
+  }
+});
+
+app.get('/api/profitability/at-stock', async (req, res) => {
+  if (!['admin', 'manager'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Administrator or manager access is required for AT stock.' });
+  }
+  const selectedDate = normalizeDeliveryDate(req.query.date);
+  if (!selectedDate) {
+    return res.status(400).json({ error: 'Choose a valid AT stock date.' });
+  }
+
+  try {
+    const products = await req.app.locals.db.all(
+      `SELECT DISTINCT CASE WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END AS category,
+              TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName
+       FROM profitability_sales
+       WHERE company_id = ? AND CASE WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END IS NOT NULL
+       UNION
+       SELECT DISTINCT UPPER(TRIM(sales_category)) AS category,
+              TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName
+       FROM at_stock_daily
+       WHERE company_id = ?`,
+      [req.user.companyId, req.user.companyId]
+    );
+    const salesRows = await req.app.locals.db.all(
+      `SELECT sales_date AS stockDate, CASE WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END AS category,
+              TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName,
+              SUM(quantity) AS salesQty, SUM(sales_return_qty) AS returnQty
+       FROM profitability_sales
+       WHERE company_id = ? AND sales_date <= ?
+         AND CASE WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END IS NOT NULL
+       GROUP BY sales_date, CASE WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END, TRIM(item_code), TRIM(item_name)`,
+      [req.user.companyId, selectedDate]
+    );
+    const stockRows = await req.app.locals.db.all(
+      `SELECT stock_date AS stockDate, UPPER(TRIM(sales_category)) AS category,
+              TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName,
+              opening_qty AS openingQty, purchase_qty AS purchaseQty, assigned
+       FROM at_stock_daily
+       WHERE company_id = ? AND stock_date <= ?`,
+      [req.user.companyId, selectedDate]
+    );
+
+    const getProductKey = row =>
+      `${row.category}\u0000${String(row.itemCode || '').toLowerCase()}\u0000${String(row.itemName || '').toLowerCase()}`;
+    const salesByProduct = new Map();
+    for (const row of salesRows) {
+      const key = getProductKey(row);
+      if (!salesByProduct.has(key)) salesByProduct.set(key, new Map());
+      salesByProduct.get(key).set(row.stockDate, row);
+    }
+    const stockByProduct = new Map();
+    for (const row of stockRows) {
+      const key = getProductKey(row);
+      if (!stockByProduct.has(key)) stockByProduct.set(key, new Map());
+      stockByProduct.get(key).set(row.stockDate, row);
+    }
+
+    const rows = products.map(product => {
+      const key = getProductKey(product);
+      const sales = salesByProduct.get(key) || new Map();
+      const stock = stockByProduct.get(key) || new Map();
+      const dates = [...new Set([...sales.keys(), ...stock.keys(), selectedDate])]
+        .filter(date => date <= selectedDate)
+        .sort();
+      // Tracking starts on the first date the admin enters an opening balance.
+      let onHand = null;
+      let selectedDay;
+      for (const date of dates) {
+        const sale = sales.get(date);
+        const stockEntry = stock.get(date);
+        const hasOpening = stockEntry?.openingQty !== null && stockEntry?.openingQty !== undefined;
+        if (!hasOpening && onHand === null && date !== selectedDate) continue;
+        const opening = hasOpening ? Number(stockEntry.openingQty) : onHand ?? 0;
+        const unitWeight = product.category === 'AT' ? (getAtPackWeightKg(product.itemName) || 1) : 1;
+        const salesQty = Number(sale?.salesQty || 0) * unitWeight;
+        const returnQty = Number(sale?.returnQty || 0) * unitWeight;
+        const purchaseQty = Number(stockEntry?.purchaseQty || 0);
+        onHand = opening + purchaseQty + returnQty - salesQty;
+        if (date === selectedDate) {
+          selectedDay = { openingQty: opening, purchaseQty, salesQty, returnQty, closingQty: onHand, assigned: Boolean(stockEntry?.assigned) };
+        }
+      }
+      const packWeightKg = product.category === 'AT' ? getAtPackWeightKg(product.itemName) : null;
+      return {
+        ...product,
+        ...selectedDay,
+        packWeightKg,
+        displayName: product.category === 'AT' ? getAtDisplayName(product.itemName, packWeightKg) : product.itemName
+      };
+    }).sort((a, b) => a.category.localeCompare(b.category) || a.itemName.localeCompare(b.itemName));
+
+    res.json({ date: selectedDate, rows });
+  } catch (error) {
+    console.error('AT stock report failed:', error);
+    res.status(500).json({ error: 'Unable to load AT stock for this date.' });
+  }
+});
+
+app.put('/api/profitability/at-stock/:date', async (req, res) => {
+  if (!['admin', 'manager'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Administrator or manager access is required for AT stock.' });
+  }
+  const selectedDate = normalizeDeliveryDate(req.params.date);
+  if (!selectedDate) return res.status(400).json({ error: 'Choose a valid AT stock date.' });
+  if (!req.body || !Array.isArray(req.body.entries) || req.body.entries.length > 5000) {
+    return res.status(400).json({ error: 'Provide a valid list of AT stock entries.' });
+  }
+  const canEditOpening = req.user.role === 'admin';
+  const entries = [];
+  for (const entry of req.body.entries) {
+    const category = String(entry.category || '').trim().toUpperCase();
+    const itemCode = String(entry.itemCode || '').trim();
+    const itemName = String(entry.itemName || '').trim();
+    if (!['AT', 'BC'].includes(category) || !itemName || itemName.length > 300 || itemCode.length > 100) {
+      return res.status(400).json({ error: 'An AT stock entry contains invalid product information.' });
+    }
+    const openingQty = canEditOpening ? entry.openingQty : null;
+    const purchaseQty = entry.purchaseQty;
+    if (
+      (canEditOpening && (typeof openingQty !== 'number' || !Number.isFinite(openingQty) || openingQty < 0 || openingQty > 1000000000)) ||
+      (typeof purchaseQty !== 'number' || !Number.isFinite(purchaseQty) || purchaseQty < 0 || purchaseQty > 1000000000)
+    ) {
+      return res.status(400).json({ error: 'Opening stock and purchases must be valid non-negative quantities.' });
+    }
+    entries.push({ category, itemCode, itemName, openingQty, purchaseQty });
+  }
+
+  try {
+    const db = req.app.locals.db;
+    const knownProducts = await db.all(
+      `SELECT DISTINCT CASE WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END AS category,
+              TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName
+       FROM profitability_sales
+       WHERE company_id = ? AND CASE WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END IS NOT NULL
+       UNION
+       SELECT DISTINCT UPPER(TRIM(sales_category)) AS category,
+              TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName
+       FROM at_stock_daily
+       WHERE company_id = ?`,
+      [req.user.companyId, req.user.companyId]
+    );
+    const productKey = product =>
+      `${product.category}\u0000${String(product.itemCode || '').toLowerCase()}\u0000${String(product.itemName || '').toLowerCase()}`;
+    const knownProductKeys = new Set(knownProducts.map(productKey));
+    for (const entry of entries) {
+      if (!knownProductKeys.has(productKey(entry))) {
+        return res.status(400).json({ error: 'An AT stock product is not in the uploaded sales data.' });
+      }
+      const packWeightKg = entry.category === 'AT' ? getAtPackWeightKg(entry.itemName) : null;
+      if (entry.category === 'AT' && !packWeightKg) {
+        return res.status(400).json({ error: `The item name "${entry.itemName}" must include a pack weight up to 30 kg.` });
+      }
+      const unitWeight = entry.category === 'AT' ? packWeightKg : 1;
+      const openingBaseQty = entry.openingQty === null ? null : entry.openingQty * unitWeight;
+      const purchaseBaseQty = entry.purchaseQty === null ? 0 : entry.purchaseQty * unitWeight;
+      await db.run(
+        `INSERT INTO at_stock_daily
+           (company_id, stock_date, sales_category, item_code, item_name, opening_qty, purchase_qty)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(company_id, stock_date, sales_category, item_code, item_name)
+         DO UPDATE SET
+           opening_qty = COALESCE(excluded.opening_qty, at_stock_daily.opening_qty),
+           purchase_qty = CASE WHEN ? IS NULL
+             THEN at_stock_daily.purchase_qty ELSE excluded.purchase_qty END`,
+        [
+          req.user.companyId, selectedDate, entry.category, entry.itemCode, entry.itemName,
+          openingBaseQty, purchaseBaseQty, entry.purchaseQty
+        ]
+      );
+    }
+    res.json({ message: 'AT stock updated.' });
+  } catch (error) {
+    console.error('AT stock update failed:', error);
+    res.status(500).json({ error: 'Unable to save AT stock changes.' });
+  }
+});
+
+app.patch('/api/profitability/at-stock/:date/assigned', async (req, res) => {
+  if (!['admin', 'manager'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Administrator or manager access is required for AT stock.' });
+  }
+  const selectedDate = normalizeDeliveryDate(req.params.date);
+  const category = String(req.body?.category || '').trim().toUpperCase();
+  const itemCode = String(req.body?.itemCode || '').trim();
+  const itemName = String(req.body?.itemName || '').trim();
+  if (!selectedDate || !['AT', 'BC'].includes(category) || !itemName || itemName.length > 300 || itemCode.length > 100 || typeof req.body?.assigned !== 'boolean') {
+    return res.status(400).json({ error: 'Provide a valid product and assigned status.' });
+  }
+  try {
+    const db = req.app.locals.db;
+    const known = await db.get(
+      `SELECT 1 FROM profitability_sales
+       WHERE company_id = ? AND TRIM(item_name) = ? AND TRIM(item_code) = ? LIMIT 1`,
+      [req.user.companyId, itemName, itemCode]
+    );
+    if (!known) return res.status(400).json({ error: 'This product is not in the uploaded sales data.' });
+    await db.run(
+      `INSERT INTO at_stock_daily (company_id, stock_date, sales_category, item_code, item_name, assigned)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(company_id, stock_date, sales_category, item_code, item_name)
+       DO UPDATE SET assigned = excluded.assigned`,
+      [req.user.companyId, selectedDate, category, itemCode, itemName, req.body.assigned ? 1 : 0]
+    );
+    res.json({ assigned: req.body.assigned });
+  } catch (error) {
+    console.error('AT assigned update failed:', error);
+    res.status(500).json({ error: 'Unable to update the assigned status.' });
+  }
+});
+
+app.get('/api/profitability/at-assignment', async (req, res) => {
+  if (!['admin', 'manager'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Administrator or manager access is required for AT assignment.' });
+  }
+  const selectedDate = normalizeDeliveryDate(req.query.date);
+  if (!selectedDate) return res.status(400).json({ error: 'Choose a valid assignment date.' });
+  try {
+    const rows = await req.app.locals.db.all(
+      `SELECT bills.assigned_to AS agentId, COALESCE(users.full_name, 'Unassigned') AS agentName,
+              TRIM(ps.item_code) AS itemCode, TRIM(ps.item_name) AS itemName,
+              SUM(ps.quantity) AS quantity, COUNT(DISTINCT ps.bill_no) AS billCount
+       FROM profitability_sales ps
+       LEFT JOIN bills ON bills.company_id = ps.company_id AND bills.bill_no = ps.bill_no
+       LEFT JOIN users ON users.id = bills.assigned_to
+       WHERE ps.company_id = ? AND ps.sales_date = ? AND UPPER(ps.sales_category) LIKE '%06 ATTA%'
+       GROUP BY bills.assigned_to, TRIM(ps.item_code), TRIM(ps.item_name)
+       HAVING SUM(ps.quantity) <> 0`,
+      [req.user.companyId, selectedDate]
+    );
+    const agents = new Map();
+    for (const row of rows) {
+      const key = row.agentId ?? 'none';
+      if (!agents.has(key)) agents.set(key, { agentId: row.agentId, agentName: row.agentName, items: [] });
+      const packWeightKg = getAtPackWeightKg(row.itemName);
+      agents.get(key).items.push({
+        itemName: row.itemName,
+        displayName: getAtDisplayName(row.itemName, packWeightKg),
+        packWeightKg,
+        quantity: Number(row.quantity),
+        billCount: row.billCount
+      });
+    }
+    const result = [...agents.values()]
+      .map(agent => ({ ...agent, items: agent.items.sort((a, b) => a.displayName.localeCompare(b.displayName)) }))
+      .sort((a, b) => (a.agentId === null) - (b.agentId === null) || a.agentName.localeCompare(b.agentName));
+    res.json({ date: selectedDate, agents: result });
+  } catch (error) {
+    console.error('AT assignment report failed:', error);
+    res.status(500).json({ error: 'Unable to load the AT assignment for this date.' });
   }
 });
 

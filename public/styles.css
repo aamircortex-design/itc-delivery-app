@@ -32,6 +32,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .damage-nav-link { width: 100%; border: 0; color: #f1c48c; background: transparent; text-align: left; }
 .damage-nav-link:hover { color: #ffe1b9; background: #3c3022; }
 .damage-nav-link svg { flex: 0 0 auto; }
+.profitability-sub-link { min-height: 34px; margin: -3px 0 2px 24px; padding-left: 20px; border-left: 1px solid #52665a; border-radius: 0 7px 7px 0; color: #aebcb5; font-size: 12px; }
+.profitability-sub-link[hidden] { display: none; }
 .nav-link:hover { color: #f6fbf8; background: #1c332a; }
 .nav-link.active { color: #e8f6ee; background: #244337; }
 .nav-link[hidden] { display: none; }
@@ -245,6 +247,23 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .damage-modal-icon { color: #a26426; background: #fff2e2; }
 .damage-date-field { margin: -4px 0 14px; }
 .damage-date-field input { color: #6a756e; background: #f6f8f6; }
+.at-stock-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.at-stock-heading h3 { margin: 0; color: #36463c; font-size: 15px; }
+.at-stock-heading p, .at-stock-note, .at-stock-save-status { margin: 5px 0 0; color: #78847c; font-size: 10px; }
+.at-stock-table-wrap { max-width: 100%; overflow-x: auto; }
+.at-stock-table { width: 100%; min-width: 850px; border-collapse: collapse; }
+.at-stock-table th, .at-stock-table td { padding: 8px 7px; border-bottom: 1px solid #edf0ee; text-align: left; vertical-align: middle; }
+.at-stock-table th { color: #77837b; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.at-stock-table td { color: #47544c; font-size: 10px; }
+.at-stock-table td small { display: block; margin-top: 3px; color: #89938d; font-size: 9px; }
+.at-stock-units { display: flex; gap: 5px; }
+.at-stock-input { display: inline-flex; align-items: center; gap: 3px; color: #78847c; font-size: 9px; }
+.at-stock-input input { width: 58px; height: 29px; padding: 0 5px; border: 1px solid #e0e7e1; border-radius: 5px; color: #36463c; font-size: 10px; }
+.at-stock-input input:disabled { color: #77837b; background: #f5f7f5; }
+.at-stock-missing-pack { color: #a3473d; font-size: 9px; }
+.at-stock-empty { padding: 16px; color: #78847c; font-size: 10px; text-align: center; }
+.at-stock-note { line-height: 1.5; }
+.at-stock-save-status.error { color: #a3473d; }
 .damage-history-heading h3 span { color: #89938d; font-size: 9px; font-weight: 500; }
 .damage-report-history { margin-top: 23px; padding-top: 16px; border-top: 1px solid #edf0ee; }
 .damage-history-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
@@ -329,7 +348,7 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
   .brand-mark { width: 29px; height: 29px; }
   .nav-caption, .sidebar-bottom { display: none; }
   .side-nav { display: flex; width: 100%; max-width: 100%; margin: 0; overflow-x: auto; }
-  .nav-link { min-height: 35px; flex: 0 0 auto; gap: 7px; padding: 0 9px; font-size: 11px; }
+  .nav-link { min-height: 35px; flex: 0 0 auto; gap: 7px; margin: 0; padding: 0 9px; border: 0; font-size: 11px; }
   .damage-nav-link { width: auto; }
   .nav-link svg { width: 16px; height: 16px; }
   .nav-link:first-child { display: none; }
@@ -421,3 +440,8 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
   .reconcile-shortcut { margin-top: 0; }
   .reconcile-shortcut .button { align-self: stretch; }
 }
+
+.at-stock-assigned { min-height: 34px; padding: 0 12px; border: 1px solid var(--line, #d7ddd8); background: #fff; color: inherit; white-space: nowrap; }
+.at-stock-assigned.is-assigned { background: #3f7a56; border-color: #3f7a56; color: #fff; }
+.at-assignment-agent { margin-top: 20px; }
+.at-assignment-agent h4 { margin: 0 0 8px; font-size: 1rem; }
