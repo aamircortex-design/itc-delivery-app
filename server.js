@@ -1236,8 +1236,8 @@ async function parseDeliveryRows(file) {
 }
 
 app.post('/api/profitability/sales', upload.single('file'), async (req, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Administrator access is required to import profitability sales data.' });
+  if (!['admin', 'manager'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Administrator or manager access is required to import the sales register.' });
   }
   if (!req.file) return res.status(400).json({ error: 'Choose a sales register file to upload.' });
 
@@ -1833,12 +1833,13 @@ app.get('/api/profitability/at-assignment', async (req, res) => {
     const rows = await req.app.locals.db.all(
       `SELECT bills.assigned_to AS agentId, COALESCE(users.full_name, 'Unassigned') AS agentName,
               TRIM(ps.item_code) AS itemCode, TRIM(ps.item_name) AS itemName,
+              CASE WHEN UPPER(ps.sales_category) LIKE '%06 ATTA%' THEN 'AT' ELSE 'BC' END AS category,
               SUM(ps.quantity) AS quantity, COUNT(DISTINCT ps.bill_no) AS billCount
        FROM profitability_sales ps
        LEFT JOIN bills ON bills.company_id = ps.company_id AND bills.bill_no = ps.bill_no
        LEFT JOIN users ON users.id = bills.assigned_to
-       WHERE ps.company_id = ? AND ps.sales_date = ? AND UPPER(ps.sales_category) LIKE '%06 ATTA%'
-       GROUP BY bills.assigned_to, TRIM(ps.item_code), TRIM(ps.item_name)
+       WHERE ps.company_id = ? AND ps.sales_date = ? AND (UPPER(ps.sales_category) LIKE '%06 ATTA%' OR UPPER(ps.sales_category) LIKE '%50 BREAKFAST CEREAL%')
+       GROUP BY bills.assigned_to, TRIM(ps.item_code), TRIM(ps.item_name), 3
        HAVING SUM(ps.quantity) <> 0`,
       [req.user.companyId, selectedDate]
     );
@@ -1846,17 +1847,18 @@ app.get('/api/profitability/at-assignment', async (req, res) => {
     for (const row of rows) {
       const key = row.agentId ?? 'none';
       if (!agents.has(key)) agents.set(key, { agentId: row.agentId, agentName: row.agentName, items: [] });
-      const packWeightKg = getAtPackWeightKg(row.itemName);
+      const packWeightKg = row.category === 'AT' ? getAtPackWeightKg(row.itemName) : null;
       agents.get(key).items.push({
+        category: row.category,
         itemName: row.itemName,
-        displayName: getAtDisplayName(row.itemName, packWeightKg),
+        displayName: row.category === 'AT' ? getAtDisplayName(row.itemName, packWeightKg) : row.itemName,
         packWeightKg,
         quantity: Number(row.quantity),
         billCount: row.billCount
       });
     }
     const result = [...agents.values()]
-      .map(agent => ({ ...agent, items: agent.items.sort((a, b) => a.displayName.localeCompare(b.displayName)) }))
+      .map(agent => ({ ...agent, items: agent.items.sort((a, b) => a.category.localeCompare(b.category) || a.displayName.localeCompare(b.displayName)) }))
       .sort((a, b) => (a.agentId === null) - (b.agentId === null) || a.agentName.localeCompare(b.agentName));
     res.json({ date: selectedDate, agents: result });
   } catch (error) {

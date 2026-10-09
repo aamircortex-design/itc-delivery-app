@@ -421,11 +421,11 @@ function initializeAtStockInterface() {
   assignment.hidden = true;
   assignment.innerHTML = `
     <div class="at-stock-heading">
-      <div><h3>AT assignment by delivery agent</h3><p id="at-assignment-date-label"></p></div>
+      <div><h3>AT and BC assignment by delivery agent</h3><p id="at-assignment-date-label"></p></div>
     </div>
     <div class="dialog-error" id="at-assignment-error" role="alert" hidden></div>
     <div id="at-assignment-agents"></div>
-    <p class="at-stock-empty" id="at-assignment-empty" hidden>No AT sales are available for this date.</p>
+    <p class="at-stock-empty" id="at-assignment-empty" hidden>No AT or BC sales are available for this date.</p>
     <p class="at-stock-note">Quantities come from the uploaded sales register and follow the delivery assignments made under Deliveries. Bags are 30 kg each.</p>`;
   panel.insertAdjacentElement('afterend', assignment);
 }
@@ -472,9 +472,10 @@ async function loadAtAssignmentReport() {
       <article class="at-assignment-agent">
         <h4>${escapeHtml(agent.agentName)}</h4>
         <table class="at-stock-table">
-          <thead><tr><th>Atta</th><th>Quantity</th><th>Bills</th></tr></thead>
+          <thead><tr><th>Category</th><th>Product</th><th>Quantity</th><th>Bills</th></tr></thead>
           <tbody>${agent.items.map(item => `<tr>
-            <td data-label="Atta" title="${escapeHtml(item.itemName)}">${escapeHtml(item.displayName)}</td>
+            <td data-label="Category">${item.category}</td>
+            <td data-label="Product" title="${escapeHtml(item.itemName)}">${escapeHtml(item.displayName)}</td>
             <td data-label="Quantity">${item.packWeightKg
               ? formatAtStockQuantity(item.quantity * item.packWeightKg, item.packWeightKg)
               : `${formatStockNumber(item.quantity)} pcs`}</td>
@@ -756,8 +757,10 @@ async function uploadProfitabilityFile(file) {
       body: formData
     });
     status.textContent = result.message;
-    await loadProfitabilityReport();
-    await loadRfaReport();
+    if (currentUser.role === 'admin') {
+      await loadProfitabilityReport();
+      await loadRfaReport();
+    }
   } catch (error) {
     status.textContent = error.message;
     status.classList.add('error');
@@ -797,29 +800,35 @@ function showDashboardPage(page) {
   const isAdmin = currentUser?.role === 'admin';
   const isAtStock = page === 'at-stock' && ['admin', 'manager'].includes(currentUser?.role);
   const isAtAssignment = page === 'at-assignment' && ['admin', 'manager'].includes(currentUser?.role);
-  const isProfitability = page === 'profitability' && isAdmin;
+  const isManagerUpload = page === 'profitability' && currentUser?.role === 'manager';
+  const isProfitability = page === 'profitability' && (isAdmin || isManagerUpload);
   const isAtArea = isAtStock || isAtAssignment;
   const isProfitabilityArea = isProfitability || isAtArea;
   document.querySelector('#overview').hidden = isProfitabilityArea;
   document.querySelector('#profitability').hidden = !isProfitabilityArea;
   document.querySelector('#profitability-at-stock-report').hidden = !isAtStock;
   document.querySelector('#profitability-at-assignment-report').hidden = !isAtAssignment;
-  document.querySelector('.profitability-tabs').hidden = isAtArea;
+  document.querySelector('.profitability-tabs').hidden = isAtArea || isManagerUpload;
   document.querySelector('#profitability-sku-report').hidden = isAtArea;
-  document.querySelector('#profitability-rfa-report').hidden = isAtArea;
+  document.querySelector('#profitability-sku-report > .profitability-panel').hidden = isManagerUpload;
+  document.querySelector('#profitability-sku-report > .page-footer').hidden = isManagerUpload;
+  document.querySelector('#import-profit-costs').closest('.profitability-import-card').hidden = isManagerUpload;
+  document.querySelector('#profitability-rfa-report').hidden = isAtArea || isManagerUpload || document.querySelector('#profitability-rfa-tab-button').getAttribute('aria-selected') !== 'true';
   document.querySelector('.day-picker').hidden = isProfitabilityArea;
   exportButton.hidden = isProfitabilityArea || currentUser?.role === 'delivery_partner';
   document.querySelector('.breadcrumbs strong').textContent =
     isAtAssignment ? 'Profitability / AT Assignment' : isAtStock ? 'Profitability / AT Stock' : isProfitability ? 'Profitability' : 'Deliveries';
   const profitabilityHeading = document.querySelector('#profitability .page-heading h1');
-  profitabilityHeading.innerHTML = isAtAssignment ? 'AT Assignment <span>by agent.</span>' : isAtStock ? 'AT Stock <span>management.</span>' : 'Profitability <span>reports.</span>';
+  profitabilityHeading.innerHTML = isManagerUpload ? 'Sales register <span>upload.</span>' : isAtAssignment ? 'AT Assignment <span>by agent.</span>' : isAtStock ? 'AT Stock <span>management.</span>' : 'Profitability <span>reports.</span>';
   document.querySelector('#profitability .page-heading .eyebrow').innerHTML = isAtArea
     ? '<span class="eyebrow-dot"></span> INVENTORY MANAGEMENT'
+    : isManagerUpload ? '<span class="eyebrow-dot"></span> SALES REGISTER UPLOAD'
     : '<span class="eyebrow-dot"></span> ADMIN ONLY · FINANCIAL REPORTING';
   document.querySelector('#profitability .page-heading .page-subtitle').textContent = isAtAssignment
-    ? 'See which delivery agent needs which atta, based on the sales register and Deliveries assignments.'
+    ? 'See which delivery agent needs which AT and BC items, based on the sales register and Deliveries assignments.'
     : isAtStock
     ? 'Track opening stock, sales, returns, purchases, and closing stock for AT and BC products.'
+    : isManagerUpload ? 'Upload the daily sales register so AT stock and assignments stay up to date.'
     : 'Review SKU profitability and net RFA due from the company.';
   document.querySelector('.profitability-date-help').textContent = isAtArea
     ? 'Select the date for the stock balance.'
@@ -1619,11 +1628,10 @@ document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
     let page = link.id === 'at-assignment-link' ? 'at-assignment'
       : link.id === 'at-stock-link' ? 'at-stock'
       : link.id === 'profitability-link' ? 'profitability' : 'deliveries';
-    if (page === 'profitability' && currentUser?.role === 'manager') page = 'at-stock';
-    if (page === 'profitability' && currentUser?.role !== 'admin') return;
+    if (page === 'profitability' && !['admin', 'manager'].includes(currentUser?.role)) return;
     if (['at-stock', 'at-assignment'].includes(page) && !['admin', 'manager'].includes(currentUser?.role)) return;
     showDashboardPage(page);
-    if (page === 'profitability') {
+    if (page === 'profitability' && currentUser.role === 'admin') {
       showProfitabilityTab('sku');
       loadProfitabilityReport();
     }
