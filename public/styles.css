@@ -258,13 +258,26 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .damage-history-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .damage-history-heading h3 { margin: 0; color: #46534c; font-size: 11px; font-weight: 600; }
 .damage-report-list { display: grid; max-height: 210px; gap: 7px; overflow-y: auto; }
-.damage-report { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 7px; border: 1px solid #edf0ee; border-radius: 7px; color: inherit; text-decoration: none; }
+.damage-report { display: grid; min-width: 0; grid-template-columns: 43px minmax(0, 1fr) auto; align-items: center; gap: 8px 10px; padding: 7px; border: 1px solid #edf0ee; border-radius: 7px; color: inherit; }
 .damage-report:hover { border-color: #d5e4d9; background: #f8fbf9; }
-.damage-report img { width: 43px; height: 43px; flex: 0 0 auto; border-radius: 5px; background: #f0f2f0; object-fit: cover; }
+.damage-report-photo-link { width: 43px; height: 43px; }
+.damage-report img { width: 43px; height: 43px; border-radius: 5px; background: #f0f2f0; object-fit: cover; }
 .damage-report-details { display: grid; min-width: 0; flex: 1; gap: 4px; }
 .damage-report-details strong { color: #3e4b43; font-size: 10px; font-weight: 600; }
 .damage-report-details span { overflow: hidden; color: #89938d; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.damage-report-open { color: #87928b; font-size: 12px; }
+.damage-report-actions { display: grid; justify-items: end; gap: 3px; }
+.damage-approval-status { width: max-content; padding: 2px 6px; border-radius: 10px; font-weight: 700; }
+.damage-approval-pending { color: #8b6029 !important; background: #fff2dc; }
+.damage-approval-approved { color: #287348 !important; background: #e8f5eb; }
+.damage-approval-rejected { color: #a3473d !important; background: #fff0ed; }
+.damage-report-review { display: flex; grid-column: 1 / -1; align-items: center; gap: 5px; }
+.damage-entry-month-label { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; color: #64716a; font-size: 9px; }
+.damage-entry-month { width: 128px; height: 30px; padding: 0 5px; border: 1px solid #e3e8e4; border-radius: 5px; color: #445149; background: #fff; font-size: 9px; }
+.damage-review-note { min-width: 0; flex: 1; height: 30px; padding: 0 7px; border: 1px solid #e3e8e4; border-radius: 5px; font-size: 9px; }
+.damage-report-review .button { min-height: 30px; padding: 0 8px; font-size: 9px; }
+.damage-photo-existing { margin: 8px 0 0; color: #738077; font-size: 9px; }
+.damage-history-actions { display: flex; align-items: center; gap: 9px; }
+.damage-history-actions .button { min-height: 29px; padding: 0 8px; font-size: 9px; }
 .damage-history-empty { margin: 0; padding: 12px; color: #89938d; font-size: 9px; text-align: center; }
 .damage-history-empty.error { color: #a3473d; }
 .reconcile-shortcut { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: -5px 0 16px; padding: 10px 11px; border: 1px solid #e8efea; border-radius: 7px; background: #f7faf8; }

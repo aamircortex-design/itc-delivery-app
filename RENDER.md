@@ -62,9 +62,16 @@ implicit TLS; other ports use the normal SMTP connection with Nodemailer authent
 
 ## RT damage reports
 
-Delivery agents can submit an RT number and damaged-stock photo from the dashboard.
-Reports are permanent and cannot be deleted through the app. They are shown to the
-whole workspace, including managers, filtered by the dashboard's selected date.
+Delivery agents can submit an RT number, outlet name, delivery-agent name, and
+RT date, with the delivery-agent name taken from their account, and a damaged-stock
+photo from the dashboard. Reports are permanent and cannot be deleted through the
+app. The RT history and Excel export follow the date selected in the RT form.
+Managers can approve or reject pending reports;
+the submitting agent can edit their own pending report. An admin can reopen an
+approved or rejected report for correction and manager re-approval. The RT Damage
+history can be exported to Excel for the selected date. During approval, the manager
+records the month the RT was entered; this is kept separately from its RT date and
+included in the Excel export.
 Admins and managers can filter the delivery list by assigned delivery agent;
 the delivery summary totals follow the selected agent. Completed deliveries are
 highlighted green.

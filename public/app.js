@@ -17,6 +17,7 @@ let deliveryPartners = [];
 let currentUser = null;
 let selectedFile = null;
 let activeBill = null;
+let editingDamageReportId = null;
 let selectedSalesmanFilter = '';
 let hasInitializedDeliveryDate = false;
 const selectedBillIds = new Set();
@@ -1051,36 +1052,88 @@ async function saveReconciliation(event) {
 
 async function loadDamageReports() {
   const reportList = document.querySelector('#damage-report-list');
-  const dateField = document.querySelector('#rt-damage-date');
-  if (dateField) dateField.value = selectedDeliveryDate;
-  document.querySelector('#damage-history-date').textContent = `· ${formatDate(selectedDeliveryDate)}`;
+  const reportDate = document.querySelector('#rt-damage-date').value || selectedDeliveryDate;
+  document.querySelector('#damage-history-date').textContent = `· ${formatDate(reportDate)}`;
   try {
-    const reports = await requestJson(`/api/rt-damage?date=${encodeURIComponent(selectedDeliveryDate)}`);
+    const reports = await requestJson(`/api/rt-damage?date=${encodeURIComponent(reportDate)}`);
     if (!reports.length) {
-      reportList.innerHTML = `<p class="damage-history-empty">No RT damage reports for ${escapeHtml(formatDate(selectedDeliveryDate))}.</p>`;
+      reportList.innerHTML = `<p class="damage-history-empty">No RT damage reports for ${escapeHtml(formatDate(reportDate))}.</p>`;
       return;
     }
-    reportList.innerHTML = reports.map(report => `
-      <a class="damage-report" href="/api/rt-damage/${Number(report.id)}/photo" target="_blank" rel="noopener">
-        <img src="/api/rt-damage/${Number(report.id)}/photo" alt="Damaged stock for RT ${escapeHtml(report.rtNumber)}" loading="lazy">
-        <span class="damage-report-details">
-          <strong>RT ${escapeHtml(report.rtNumber)}</strong>
-          <span>${escapeHtml(report.submittedBy)} · ${escapeHtml(formatDate(report.createdAt))}</span>
-        </span>
-        <span class="damage-report-open" aria-hidden="true">↗</span>
-      </a>
-    `).join('');
+    reportList.innerHTML = reports.map(report => {
+      const approvalClass = `damage-approval-${String(report.approvalStatus).toLocaleLowerCase()}`;
+      const editButton = report.canEdit
+        ? `<button class="text-link" type="button" data-edit-damage="${Number(report.id)}">Edit</button>`
+        : '';
+      const reviewActions = currentUser?.role === 'manager' && report.approvalStatus === 'Pending'
+        ? `<div class="damage-report-review"><label class="damage-entry-month-label">RT entered in <input class="damage-entry-month" type="month" required aria-label="Month this RT was entered" value="${escapeHtml(report.rtEntryMonth || '')}"></label><input class="damage-review-note" type="text" maxlength="500" aria-label="Optional review note for RT ${escapeHtml(report.rtNumber)}" placeholder="Optional review note"><button class="button button-primary" type="button" data-review-damage="${Number(report.id)}" data-decision="Approved">Approve</button><button class="button button-secondary" type="button" data-review-damage="${Number(report.id)}" data-decision="Rejected">Reject</button></div>`
+        : '';
+      const reopenAction = currentUser?.role === 'admin' && report.approvalStatus !== 'Pending'
+        ? `<button class="text-link" type="button" data-reopen-damage="${Number(report.id)}">Reopen for correction</button>`
+        : '';
+      return `
+        <article class="damage-report">
+          <a class="damage-report-photo-link" href="/api/rt-damage/${Number(report.id)}/photo" target="_blank" rel="noopener">
+            <img src="/api/rt-damage/${Number(report.id)}/photo" alt="Damaged stock for RT ${escapeHtml(report.rtNumber)}" loading="lazy">
+          </a>
+          <span class="damage-report-details">
+            <strong>RT ${escapeHtml(report.rtNumber)} · ${escapeHtml(report.outletName || 'Outlet not recorded')}</strong>
+            <span>Agent: ${escapeHtml(report.agentName || 'Not recorded')} · Submitted by ${escapeHtml(report.submittedBy)} · ${escapeHtml(formatDate(report.createdAt))}</span>
+            <span class="damage-approval-status ${approvalClass}">${escapeHtml(report.approvalStatus)}</span>
+            ${report.rtEntryMonth ? `<span>RT entered in: ${escapeHtml(new Date(`${report.rtEntryMonth}-01T00:00:00`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }))}</span>` : ''}
+            ${report.reviewedBy ? `<span>${escapeHtml(report.approvalStatus)} by ${escapeHtml(report.reviewedBy)}${report.reviewNote ? ` · ${escapeHtml(report.reviewNote)}` : ''}</span>` : ''}
+          </span>
+          <span class="damage-report-actions">${editButton}${reopenAction}</span>
+          ${reviewActions}
+        </article>
+      `;
+    }).join('');
   } catch (error) {
     reportList.innerHTML = `<p class="damage-history-empty error">${escapeHtml(error.message)}</p>`;
   }
 }
 
 function openDamageDialog() {
+  resetDamageForm();
+  clearDamagePhoto();
   document.querySelector('#rt-damage-error').hidden = true;
   document.querySelector('#rt-damage-error').textContent = '';
-  document.querySelector('#rt-damage-date').value = selectedDeliveryDate;
   damageDialog.showModal();
   loadDamageReports();
+}
+
+function resetDamageForm() {
+  editingDamageReportId = null;
+  damageForm.reset();
+  document.querySelector('#rt-damage-date').value = selectedDeliveryDate || getLocalDateValue();
+  document.querySelector('#rt-agent-input').value = currentUser?.fullName || '';
+  document.querySelector('#rt-damage-photo').required = true;
+  document.querySelector('#rt-existing-photo-note').hidden = true;
+  document.querySelector('#cancel-edit-rt-damage').hidden = true;
+  document.querySelector('#save-rt-damage').textContent = 'Save report';
+}
+
+function editDamageReport(reportId) {
+  const reportDate = document.querySelector('#rt-damage-date').value || selectedDeliveryDate;
+  requestJson(`/api/rt-damage?date=${encodeURIComponent(reportDate)}`).then(reports => {
+    const report = reports.find(item => Number(item.id) === Number(reportId));
+    if (!report?.canEdit) {
+      showToast('This report is no longer available for editing.', true);
+      return;
+    }
+    editingDamageReportId = report.id;
+    document.querySelector('#rt-outlet-input').value = report.outletName;
+    document.querySelector('#rt-agent-input').value = report.agentName;
+    document.querySelector('#rt-number-input').value = report.rtNumber;
+    document.querySelector('#rt-damage-date').value = report.damageDate;
+    document.querySelector('#rt-damage-photo').required = false;
+    document.querySelector('#rt-existing-photo-note').hidden = false;
+    document.querySelector('#cancel-edit-rt-damage').hidden = false;
+    document.querySelector('#save-rt-damage').textContent = 'Save changes';
+    document.querySelector('#rt-damage-error').hidden = true;
+    document.querySelector('#rt-damage-error').textContent = '';
+    damageDialog.scrollTo({ top: 0, behavior: 'smooth' });
+  }).catch(error => showToast(error.message, true));
 }
 
 function clearDamagePhoto() {
@@ -1126,12 +1179,20 @@ async function saveDamageReport(event) {
   button.textContent = 'Saving...';
   error.hidden = true;
   try {
-    const result = await requestJson('/api/rt-damage', {
-      method: 'POST',
-      body: new FormData(damageForm)
-    });
+    const damageDate = document.querySelector('#rt-damage-date').value;
+    const formData = new FormData(damageForm);
+    const result = editingDamageReportId
+      ? await requestJson(`/api/rt-damage/${editingDamageReportId}`, {
+        method: 'PUT',
+        body: formData
+      })
+      : await requestJson('/api/rt-damage', {
+        method: 'POST',
+        body: formData
+      });
     const rtNumber = document.querySelector('#rt-number-input').value.trim();
-    damageForm.reset();
+    resetDamageForm();
+    document.querySelector('#rt-damage-date').value = damageDate;
     clearDamagePhoto();
     await loadDamageReports();
     showToast(result.message || `Damage report saved for RT ${rtNumber}.`);
@@ -1141,7 +1202,7 @@ async function saveDamageReport(event) {
     showToast(requestError.message, true);
   } finally {
     button.disabled = false;
-    button.textContent = 'Save report';
+    button.textContent = editingDamageReportId ? 'Save changes' : 'Save report';
   }
 }
 
@@ -1166,12 +1227,72 @@ document.querySelector('#open-upload').addEventListener('click', openUploadDialo
 document.querySelector('#empty-upload').addEventListener('click', openUploadDialog);
 document.querySelector('#open-rt-damage').addEventListener('click', openDamageDialog);
 document.querySelector('#cancel-rt-damage').addEventListener('click', () => damageDialog.close());
+document.querySelector('#cancel-edit-rt-damage').addEventListener('click', () => {
+  resetDamageForm();
+  clearDamagePhoto();
+});
 document.querySelector('#refresh-damage-reports').addEventListener('click', loadDamageReports);
+document.querySelector('#rt-damage-date').addEventListener('change', loadDamageReports);
+document.querySelector('#export-rt-damage').addEventListener('click', event => {
+  const damageDate = document.querySelector('#rt-damage-date').value;
+  if (!damageDate) {
+    document.querySelector('#rt-damage-date').reportValidity();
+    return;
+  }
+  const date = encodeURIComponent(damageDate);
+  downloadExcelReport(`/api/rt-damage/export?date=${date}`, `RT-Damage-${damageDate}.xlsx`, event.currentTarget);
+});
 document.querySelector('#remove-damage-photo').addEventListener('click', clearDamagePhoto);
 damagePhotoInput.addEventListener('change', () => previewDamagePhoto(damagePhotoInput.files[0]));
 damageForm.addEventListener('submit', saveDamageReport);
+document.querySelector('#damage-report-list').addEventListener('click', async event => {
+  const editButton = event.target.closest('[data-edit-damage]');
+  if (editButton) {
+    editDamageReport(editButton.dataset.editDamage);
+    return;
+  }
+  const reviewButton = event.target.closest('[data-review-damage]');
+  if (reviewButton) {
+    const report = reviewButton.closest('.damage-report');
+    const monthInput = report.querySelector('.damage-entry-month');
+    if (reviewButton.dataset.decision === 'Approved' && !monthInput.value) {
+      monthInput.reportValidity();
+      return;
+    }
+    const reviewNote = report.querySelector('.damage-review-note').value.trim();
+    const rtEntryMonth = monthInput.value;
+    reviewButton.disabled = true;
+    try {
+      const result = await requestJson(`/api/rt-damage/${reviewButton.dataset.reviewDamage}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision: reviewButton.dataset.decision, reviewNote, rtEntryMonth })
+      });
+      showToast(result.message);
+      await loadDamageReports();
+    } catch (error) {
+      showToast(error.message, true);
+    } finally {
+      reviewButton.disabled = false;
+    }
+    return;
+  }
+  const reopenButton = event.target.closest('[data-reopen-damage]');
+  if (reopenButton) {
+    reopenButton.disabled = true;
+    try {
+      const result = await requestJson(`/api/rt-damage/${reopenButton.dataset.reopenDamage}/reopen`, { method: 'POST' });
+      showToast(result.message);
+      await loadDamageReports();
+    } catch (error) {
+      showToast(error.message, true);
+    } finally {
+      reopenButton.disabled = false;
+    }
+  }
+});
 damageDialog.addEventListener('close', () => {
-  damageForm.reset();
+  resetDamageForm();
   clearDamagePhoto();
 });
 document.querySelectorAll('[data-logout]').forEach(button => button.addEventListener('click', signOut));

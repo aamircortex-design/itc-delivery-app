@@ -131,7 +131,14 @@ async function initDb() {
       company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
       user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
       rt_number TEXT NOT NULL,
+      outlet_name TEXT NOT NULL DEFAULT '',
+      agent_name TEXT NOT NULL DEFAULT '',
       damage_date TEXT NOT NULL,
+      approval_status TEXT NOT NULL DEFAULT 'Pending' CHECK (approval_status IN ('Pending', 'Approved', 'Rejected')),
+      rt_entry_month TEXT,
+      reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      reviewed_at TEXT,
+      review_note TEXT NOT NULL DEFAULT '',
       photo_mime_type TEXT NOT NULL CHECK (photo_mime_type IN ('image/jpeg', 'image/png', 'image/webp')),
       photo_data BLOB NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -161,7 +168,14 @@ async function initDb() {
           company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
           user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
           rt_number TEXT NOT NULL,
+          outlet_name TEXT NOT NULL DEFAULT '',
+          agent_name TEXT NOT NULL DEFAULT '',
           damage_date TEXT NOT NULL,
+          approval_status TEXT NOT NULL DEFAULT 'Pending' CHECK (approval_status IN ('Pending', 'Approved', 'Rejected')),
+          rt_entry_month TEXT,
+          reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          reviewed_at TEXT,
+          review_note TEXT NOT NULL DEFAULT '',
           photo_mime_type TEXT NOT NULL CHECK (photo_mime_type IN ('image/jpeg', 'image/png', 'image/webp')),
           photo_data BLOB NOT NULL,
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -180,6 +194,38 @@ async function initDb() {
     } finally {
       await db.exec('PRAGMA foreign_keys = ON');
     }
+  }
+
+  const currentDamageColumns = await db.all('PRAGMA table_info(rt_damage_reports)');
+  if (!currentDamageColumns.some(column => column.name === 'outlet_name')) {
+    await db.exec("ALTER TABLE rt_damage_reports ADD COLUMN outlet_name TEXT NOT NULL DEFAULT ''");
+  }
+  if (!currentDamageColumns.some(column => column.name === 'agent_name')) {
+    await db.exec("ALTER TABLE rt_damage_reports ADD COLUMN agent_name TEXT NOT NULL DEFAULT ''");
+  }
+  await db.exec(`
+    UPDATE rt_damage_reports
+    SET agent_name = COALESCE(
+      NULLIF(agent_name, ''),
+      (SELECT full_name FROM users WHERE users.id = rt_damage_reports.user_id),
+      'Former team member'
+    )
+    WHERE agent_name = ''
+  `);
+  if (!currentDamageColumns.some(column => column.name === 'approval_status')) {
+    await db.exec("ALTER TABLE rt_damage_reports ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'Pending'");
+  }
+  if (!currentDamageColumns.some(column => column.name === 'rt_entry_month')) {
+    await db.exec('ALTER TABLE rt_damage_reports ADD COLUMN rt_entry_month TEXT');
+  }
+  if (!currentDamageColumns.some(column => column.name === 'reviewed_by')) {
+    await db.exec('ALTER TABLE rt_damage_reports ADD COLUMN reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL');
+  }
+  if (!currentDamageColumns.some(column => column.name === 'reviewed_at')) {
+    await db.exec('ALTER TABLE rt_damage_reports ADD COLUMN reviewed_at TEXT');
+  }
+  if (!currentDamageColumns.some(column => column.name === 'review_note')) {
+    await db.exec("ALTER TABLE rt_damage_reports ADD COLUMN review_note TEXT NOT NULL DEFAULT ''");
   }
 
   const userColumns = await db.all('PRAGMA table_info(users)');

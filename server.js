@@ -537,19 +537,91 @@ app.get('/api/rt-damage', async (req, res) => {
   try {
     const reports = await req.app.locals.db.all(
       `SELECT rt_damage_reports.id, rt_damage_reports.rt_number AS rtNumber,
+              rt_damage_reports.outlet_name AS outletName,
+              rt_damage_reports.agent_name AS agentName,
               rt_damage_reports.damage_date AS damageDate,
+              rt_damage_reports.approval_status AS approvalStatus,
+              rt_damage_reports.rt_entry_month AS rtEntryMonth,
+              rt_damage_reports.reviewed_at AS reviewedAt,
+              rt_damage_reports.review_note AS reviewNote,
+              COALESCE(reviewer.full_name, '') AS reviewedBy,
               rt_damage_reports.created_at AS createdAt,
+              rt_damage_reports.user_id AS submittedById,
               COALESCE(users.full_name, 'Former team member') AS submittedBy
        FROM rt_damage_reports
        LEFT JOIN users ON users.id = rt_damage_reports.user_id
+       LEFT JOIN users AS reviewer ON reviewer.id = rt_damage_reports.reviewed_by
        WHERE rt_damage_reports.company_id = ? AND rt_damage_reports.damage_date = ?
        ORDER BY rt_damage_reports.created_at DESC, rt_damage_reports.id DESC`,
       [req.user.companyId, damageDate]
     );
-    res.json(reports);
+    res.json(reports.map(report => ({
+      ...report,
+      canEdit: report.submittedById === req.user.id && report.approvalStatus === 'Pending'
+    })));
   } catch (error) {
     console.error('Could not load RT damage reports:', error);
     res.status(500).json({ error: 'Could not load RT damage reports. Please try again.' });
+  }
+});
+
+app.get('/api/rt-damage/export', async (req, res) => {
+  const damageDate = normalizeDeliveryDate(req.query.date);
+  if (!damageDate) {
+    return res.status(400).json({ error: 'Choose a valid date to export RT damage reports.' });
+  }
+  try {
+    const reports = await req.app.locals.db.all(
+      `SELECT r.id, r.rt_number AS rtNumber, r.outlet_name AS outletName,
+              r.agent_name AS agentName, r.damage_date AS damageDate,
+              r.approval_status AS approvalStatus, r.rt_entry_month AS rtEntryMonth,
+              r.reviewed_at AS reviewedAt,
+              r.review_note AS reviewNote,
+              COALESCE(submitter.full_name, 'Former team member') AS submittedBy,
+              COALESCE(reviewer.full_name, '') AS reviewedBy, r.created_at AS createdAt
+       FROM rt_damage_reports r
+       LEFT JOIN users AS submitter ON submitter.id = r.user_id
+       LEFT JOIN users AS reviewer ON reviewer.id = r.reviewed_by
+       WHERE r.company_id = ? AND r.damage_date = ?
+       ORDER BY r.created_at, r.id`,
+      [req.user.companyId, damageDate]
+    );
+    if (!reports.length) {
+      return res.status(404).json({ error: `There are no RT damage reports for ${formatSalesDate(damageDate)} to export.` });
+    }
+    const rows = [[
+      'RT Date', 'RT Number', 'Outlet Name', 'Delivery Agent', 'Submitted By',
+      'RT Entry Month', 'Approval Status', 'Reviewed By', 'Reviewed At', 'Review Note',
+      'Submitted At', 'Photo URL'
+    ], ...reports.map(report => [
+      report.damageDate,
+      report.rtNumber,
+      report.outletName,
+      report.agentName,
+      report.submittedBy,
+      report.rtEntryMonth || '',
+      report.approvalStatus,
+      report.reviewedBy,
+      report.reviewedAt || '',
+      report.reviewNote,
+      report.createdAt,
+      `${req.protocol}://${req.get('host')}/api/rt-damage/${report.id}/photo`
+    ])];
+    const workbook = createWorkbook([{
+      name: 'RT Damage Reports',
+      rows,
+      autoFilterRow: 1
+    }]);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="RT-Damage-${damageDate}.xlsx"`,
+      'Content-Length': workbook.length,
+      'Cache-Control': 'no-store'
+    });
+    res.send(Buffer.from(workbook));
+  } catch (error) {
+    console.error('Could not export RT damage reports:', error);
+    res.status(500).json({ error: 'Could not export RT damage reports. Please try again.' });
   }
 });
 
@@ -579,9 +651,13 @@ app.get('/api/rt-damage/:id/photo', async (req, res) => {
 
 app.post('/api/rt-damage', damagePhotoUpload.single('photo'), async (req, res) => {
   const rtNumber = String(req.body.rtNumber || '').trim();
+  const outletName = String(req.body.outletName || '').trim();
   const damageDate = normalizeDeliveryDate(req.body.damageDate);
   if (!rtNumber || rtNumber.length > 64 || /[\u0000-\u001f\u007f]/.test(rtNumber)) {
     return res.status(400).json({ error: 'Enter an RT number of up to 64 characters.' });
+  }
+  if (!outletName || outletName.length > 200 || /[\u0000-\u001f\u007f]/.test(outletName)) {
+    return res.status(400).json({ error: 'Enter an outlet name of up to 200 characters.' });
   }
   if (!damageDate) {
     return res.status(400).json({ error: 'Choose a valid date for the RT damage report.' });
@@ -597,14 +673,114 @@ app.post('/api/rt-damage', damagePhotoUpload.single('photo'), async (req, res) =
   try {
     const result = await req.app.locals.db.run(
       `INSERT INTO rt_damage_reports
-         (company_id, user_id, rt_number, damage_date, photo_mime_type, photo_data)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [req.user.companyId, req.user.id, rtNumber, damageDate, mimeType, req.file.buffer]
+         (company_id, user_id, rt_number, outlet_name, agent_name, damage_date, photo_mime_type, photo_data)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [req.user.companyId, req.user.id, rtNumber, outletName, req.user.fullName, damageDate, mimeType, req.file.buffer]
     );
-    res.status(201).json({ message: 'RT damage report saved.', id: result.lastID });
+    res.status(201).json({ message: 'RT damage report submitted for manager approval.', id: result.lastID });
   } catch (error) {
     console.error('Could not save RT damage report:', error);
     res.status(500).json({ error: 'Could not save the RT damage report. Please try again.' });
+  }
+});
+
+app.put('/api/rt-damage/:id', damagePhotoUpload.single('photo'), async (req, res) => {
+  const reportId = Number(req.params.id);
+  const rtNumber = String(req.body.rtNumber || '').trim();
+  const outletName = String(req.body.outletName || '').trim();
+  const damageDate = normalizeDeliveryDate(req.body.damageDate);
+  if (!Number.isSafeInteger(reportId) || reportId < 1) {
+    return res.status(400).json({ error: 'Choose a valid RT damage report.' });
+  }
+  if (!rtNumber || rtNumber.length > 64 || /[\u0000-\u001f\u007f]/.test(rtNumber)) {
+    return res.status(400).json({ error: 'Enter an RT number of up to 64 characters.' });
+  }
+  if (!outletName || outletName.length > 200 || /[\u0000-\u001f\u007f]/.test(outletName)) {
+    return res.status(400).json({ error: 'Enter an outlet name of up to 200 characters.' });
+  }
+  if (!damageDate) {
+    return res.status(400).json({ error: 'Choose a valid date for the RT damage report.' });
+  }
+  const mimeType = req.file ? getSupportedImageType(req.file.buffer) : null;
+  if (req.file && !mimeType) {
+    return res.status(400).json({ error: 'The selected file is not a valid JPEG, PNG, or WebP photo.' });
+  }
+  try {
+    const result = await req.app.locals.db.run(
+      `UPDATE rt_damage_reports
+       SET rt_number = ?, outlet_name = ?, agent_name = ?, damage_date = ?,
+           photo_mime_type = COALESCE(?, photo_mime_type),
+           photo_data = COALESCE(?, photo_data)
+       WHERE id = ? AND company_id = ? AND user_id = ? AND approval_status = 'Pending'`,
+      [rtNumber, outletName, req.user.fullName, damageDate, mimeType, req.file?.buffer || null, reportId, req.user.companyId, req.user.id]
+    );
+    if (!result.changes) {
+      return res.status(409).json({ error: 'Only your pending RT damage report can be edited. Ask an admin to reopen an approved or rejected report.' });
+    }
+    res.json({ message: 'RT damage report updated and remains pending manager approval.' });
+  } catch (error) {
+    console.error('Could not update RT damage report:', error);
+    res.status(500).json({ error: 'Could not update the RT damage report. Please try again.' });
+  }
+});
+
+app.post('/api/rt-damage/:id/review', async (req, res) => {
+  if (req.user.role !== 'manager') {
+    return res.status(403).json({ error: 'Only a manager can approve or reject RT damage reports.' });
+  }
+  const reportId = Number(req.params.id);
+  const decision = String(req.body.decision || '');
+  const rtEntryMonth = String(req.body.rtEntryMonth || '').trim();
+  const reviewNote = String(req.body.reviewNote || '').trim();
+  if (!Number.isSafeInteger(reportId) || reportId < 1 || !['Approved', 'Rejected'].includes(decision)) {
+    return res.status(400).json({ error: 'Choose a valid RT damage report and approval decision.' });
+  }
+  if (reviewNote.length > 500) {
+    return res.status(400).json({ error: 'The review note must be 500 characters or fewer.' });
+  }
+  if (decision === 'Approved' && !/^(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(rtEntryMonth)) {
+    return res.status(400).json({ error: 'Choose the month when this RT was entered.' });
+  }
+  try {
+    const result = await req.app.locals.db.run(
+      `UPDATE rt_damage_reports
+       SET approval_status = ?, rt_entry_month = ?, reviewed_by = ?, reviewed_at = ?, review_note = ?
+       WHERE id = ? AND company_id = ? AND approval_status = 'Pending'`,
+      [decision, decision === 'Approved' ? rtEntryMonth : null, req.user.id, new Date().toISOString(), reviewNote, reportId, req.user.companyId]
+    );
+    if (!result.changes) {
+      return res.status(409).json({ error: 'This report is no longer pending manager review.' });
+    }
+    res.json({ message: `RT damage report ${decision.toLowerCase()}.`, approvalStatus: decision });
+  } catch (error) {
+    console.error('Could not review RT damage report:', error);
+    res.status(500).json({ error: 'Could not review the RT damage report. Please try again.' });
+  }
+});
+
+app.post('/api/rt-damage/:id/reopen', async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only an administrator can reopen an RT damage report.' });
+  }
+  const reportId = Number(req.params.id);
+  if (!Number.isSafeInteger(reportId) || reportId < 1) {
+    return res.status(400).json({ error: 'Choose a valid RT damage report.' });
+  }
+  try {
+    const result = await req.app.locals.db.run(
+      `UPDATE rt_damage_reports
+       SET approval_status = 'Pending', rt_entry_month = NULL,
+           reviewed_by = NULL, reviewed_at = NULL, review_note = ''
+       WHERE id = ? AND company_id = ? AND approval_status IN ('Approved', 'Rejected')`,
+      [reportId, req.user.companyId]
+    );
+    if (!result.changes) {
+      return res.status(409).json({ error: 'This report is already pending or does not exist.' });
+    }
+    res.json({ message: 'RT damage report reopened. The submitting agent can now correct it before manager review.' });
+  } catch (error) {
+    console.error('Could not reopen RT damage report:', error);
+    res.status(500).json({ error: 'Could not reopen the RT damage report. Please try again.' });
   }
 });
 

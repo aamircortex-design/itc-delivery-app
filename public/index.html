@@ -363,6 +363,18 @@
       <h2 id="rt-damage-title">Report RT damage</h2>
       <p class="modal-description">Enter the RT number and attach a photo of the damaged stock received from the outlet.</p>
       <form id="rt-damage-form">
+        <label class="date-field damage-date-field" for="rt-damage-date">
+          <span>RT date</span>
+          <input id="rt-damage-date" name="damageDate" type="date" required>
+        </label>
+        <label class="date-field" for="rt-outlet-input">
+          <span>Outlet name</span>
+          <input id="rt-outlet-input" name="outletName" type="text" maxlength="200" placeholder="Enter outlet name" required>
+        </label>
+        <label class="date-field" for="rt-agent-input">
+          <span>Delivery agent name</span>
+          <input id="rt-agent-input" name="deliveryAgent" type="text" maxlength="200" readonly required>
+        </label>
         <label class="date-field" for="rt-number-input">
           <span>RT number</span>
           <input id="rt-number-input" name="rtNumber" type="text" maxlength="64" placeholder="Enter RT number" required>
@@ -372,6 +384,7 @@
           <strong>Take or choose a photo</strong>
           <span>Allow camera access when your phone asks. Photos up to 8 MB (JPEG, PNG, or WebP).</span>
         </label>
+        <p class="damage-photo-existing" id="rt-existing-photo-note" hidden>Existing photo will be kept unless you choose a new one.</p>
         <input class="visually-hidden" id="rt-damage-photo" name="photo" type="file" accept="image/*" capture="environment" required>
         <div class="damage-photo-preview-wrap" id="damage-photo-preview-wrap" hidden>
           <img id="damage-photo-preview" alt="Preview of damaged stock photo">
@@ -380,16 +393,13 @@
         </div>
         <div class="dialog-error" id="rt-damage-error" role="alert" hidden></div>
         <div class="modal-actions">
+          <button class="button button-secondary" id="cancel-edit-rt-damage" type="button" hidden>Cancel edit</button>
           <button class="button button-secondary" id="cancel-rt-damage" type="button">Cancel</button>
           <button class="button button-primary" id="save-rt-damage" type="submit">Save report</button>
         </div>
       </form>
-      <label class="date-field damage-date-field" for="rt-damage-date">
-        <span>Report date (dashboard date)</span>
-        <input id="rt-damage-date" name="damageDate" type="date" required readonly>
-      </label>
       <section class="damage-report-history" aria-labelledby="damage-history-title">
-        <div class="damage-history-heading"><h3 id="damage-history-title">RT Damage reports <span id="damage-history-date"></span></h3><button class="text-link" id="refresh-damage-reports" type="button">Refresh</button></div>
+        <div class="damage-history-heading"><h3 id="damage-history-title">RT Damage reports <span id="damage-history-date"></span></h3><div class="damage-history-actions"><button class="button button-secondary damage-export-button" id="export-rt-damage" type="button">Export Excel</button><button class="text-link" id="refresh-damage-reports" type="button">Refresh</button></div></div>
         <div id="damage-report-list" class="damage-report-list"><p class="damage-history-empty">Loading reports...</p></div>
       </section>
     </dialog>
