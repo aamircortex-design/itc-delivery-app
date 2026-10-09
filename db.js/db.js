@@ -259,9 +259,6 @@ async function initDb() {
   if (!atStockColumns.some(column => column.name === 'assigned')) {
     await db.exec('ALTER TABLE at_stock_daily ADD COLUMN assigned INTEGER NOT NULL DEFAULT 0');
   }
-  if (!atStockColumns.some(column => column.name === 'damaged_qty')) {
-    await db.exec('ALTER TABLE at_stock_daily ADD COLUMN damaged_qty REAL NOT NULL DEFAULT 0');
-  }
   const billItemColumns = await db.all('PRAGMA table_info(bill_items)');
   if (!billItemColumns.some(column => column.name === 'return_type')) {
     await db.exec("ALTER TABLE bill_items ADD COLUMN return_type TEXT NOT NULL DEFAULT ''");
