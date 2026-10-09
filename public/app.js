@@ -857,6 +857,7 @@ async function uploadFile() {
 
 function openReconcileDialog(bill) {
   activeBill = bill;
+  document.querySelector('#reconcile-item-search').value = '';
   document.querySelector('#reconcile-subtitle').textContent = `Bill #${bill.bill_no} · ${bill.outlet_name}`;
   document.querySelector('#mark-not-supplied').hidden = currentUser?.role === 'manager';
   document.querySelector('#not-supplied-note').textContent = bill.status === 'Not supplied'
@@ -873,10 +874,23 @@ function openReconcileDialog(bill) {
       <button class="item-delivered-action" type="button" data-fully-delivered="${item.id}" aria-label="Mark ${escapeHtml(item.item_name)} fully delivered" title="Set delivered quantity to the ordered quantity and clear any returns">Mark fully delivered</button>
     </div>
   `).join('');
+  filterReconcileItems();
   document.querySelector('#reconcile-error').hidden = true;
   updateDeliveryShortcutStates();
   updateNotSuppliedAction();
   reconcileDialog.showModal();
+}
+
+function filterReconcileItems() {
+  const query = document.querySelector('#reconcile-item-search').value.trim().toLocaleLowerCase();
+  const rows = [...document.querySelectorAll('#reconcile-items [data-item-row]')];
+  let visibleCount = 0;
+  for (const row of rows) {
+    const matches = row.querySelector('.reconcile-item-name').textContent.toLocaleLowerCase().includes(query);
+    row.hidden = !matches;
+    if (matches) visibleCount += 1;
+  }
+  document.querySelector('#reconcile-search-empty').hidden = visibleCount > 0 || rows.length === 0;
 }
 
 function updateNotSuppliedAction() {
@@ -1209,6 +1223,7 @@ document.querySelector('#reconcile-items').addEventListener('click', event => {
   const button = event.target.closest('[data-fully-delivered]');
   if (button) fillItemAsFullyDelivered(button.dataset.fullyDelivered);
 });
+document.querySelector('#reconcile-item-search').addEventListener('input', filterReconcileItems);
 reconcileForm.addEventListener('input', () => {
   updateDeliveryShortcutStates();
   updateNotSuppliedAction();
