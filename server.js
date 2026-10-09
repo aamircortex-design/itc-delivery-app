@@ -98,6 +98,25 @@ function getAtDisplayName(itemName, packWeightKg) {
   return ['ATTA', variant, size].filter(Boolean).join(' ');
 }
 
+function formatAtQuantity(row, quantity, isKg = true) {
+  if (row.category !== 'AT') return `${quantity} pcs`;
+  if (!row.packWeightKg) return '';
+  const kg = isKg ? quantity : quantity * row.packWeightKg;
+  const bags = Math.trunc((kg + Number.EPSILON) / 30);
+  const pieces = Math.round((kg - bags * 30) / row.packWeightKg);
+  return `${bags} bags, ${pieces} pcs`;
+}
+
+function sendXlsx(res, workbook, filename) {
+  res.set({
+    'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'Content-Disposition': `attachment; filename="${filename}"`,
+    'Content-Length': workbook.length,
+    'Cache-Control': 'no-store'
+  });
+  return res.send(Buffer.from(workbook));
+}
+
 function setSessionCookie(res, token) {
   res.cookie(sessionCookieName, token, {
     httpOnly: true,
@@ -1649,7 +1668,7 @@ app.get('/api/profitability/at-stock', async (req, res) => {
     const stockRows = await req.app.locals.db.all(
       `SELECT stock_date AS stockDate, UPPER(TRIM(sales_category)) AS category,
               TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName,
-              opening_qty AS openingQty, purchase_qty AS purchaseQty, assigned
+              opening_qty AS openingQty, purchase_qty AS purchaseQty, damaged_qty AS damagedQty, assigned
        FROM at_stock_daily
        WHERE company_id = ? AND stock_date <= ?`,
       [req.user.companyId, selectedDate]
@@ -1690,9 +1709,10 @@ app.get('/api/profitability/at-stock', async (req, res) => {
         const salesQty = Number(sale?.salesQty || 0) * unitWeight;
         const returnQty = Number(sale?.returnQty || 0) * unitWeight;
         const purchaseQty = Number(stockEntry?.purchaseQty || 0);
-        onHand = opening + purchaseQty + returnQty - salesQty;
+        const damagedQty = Number(stockEntry?.damagedQty || 0);
+        onHand = opening + purchaseQty + returnQty - salesQty - damagedQty;
         if (date === selectedDate) {
-          selectedDay = { openingQty: opening, purchaseQty, salesQty, returnQty, closingQty: onHand, assigned: Boolean(stockEntry?.assigned) };
+          selectedDay = { openingQty: opening, purchaseQty, damagedQty, salesQty, returnQty, closingQty: onHand, assigned: Boolean(stockEntry?.assigned) };
         }
       }
       const packWeightKg = product.category === 'AT' ? getAtPackWeightKg(product.itemName) : null;
@@ -1704,6 +1724,22 @@ app.get('/api/profitability/at-stock', async (req, res) => {
       };
     }).sort((a, b) => a.category.localeCompare(b.category) || a.itemName.localeCompare(b.itemName));
 
+    if (req.query.format === 'xlsx') {
+      return sendXlsx(res, createWorkbook([{
+        name: 'AT Stock',
+        rows: [
+          ['Category', 'Product', 'Opening', 'Sales', 'Sales return', 'Purchase', 'Damaged', 'Closing', 'Assigned'],
+          ...rows.map(row => [
+            row.category, row.displayName,
+            formatAtQuantity(row, row.openingQty), formatAtQuantity(row, row.salesQty),
+            formatAtQuantity(row, row.returnQty), formatAtQuantity(row, row.purchaseQty),
+            formatAtQuantity(row, row.damagedQty), formatAtQuantity(row, row.closingQty),
+            row.assigned ? 'Yes' : 'No'
+          ])
+        ],
+        autoFilterRow: 1
+      }]), `AT-Stock-${selectedDate}.xlsx`);
+    }
     res.json({ date: selectedDate, rows });
   } catch (error) {
     console.error('AT stock report failed:', error);
@@ -1731,13 +1767,15 @@ app.put('/api/profitability/at-stock/:date', async (req, res) => {
     }
     const openingQty = canEditOpening ? entry.openingQty : null;
     const purchaseQty = entry.purchaseQty;
+    const damagedQty = entry.damagedQty;
     if (
       (canEditOpening && (typeof openingQty !== 'number' || !Number.isFinite(openingQty) || openingQty < 0 || openingQty > 1000000000)) ||
-      (typeof purchaseQty !== 'number' || !Number.isFinite(purchaseQty) || purchaseQty < 0 || purchaseQty > 1000000000)
+      (typeof purchaseQty !== 'number' || !Number.isFinite(purchaseQty) || purchaseQty < 0 || purchaseQty > 1000000000) ||
+      (typeof damagedQty !== 'number' || !Number.isFinite(damagedQty) || damagedQty < 0 || damagedQty > 1000000000)
     ) {
       return res.status(400).json({ error: 'Opening stock and purchases must be valid non-negative quantities.' });
     }
-    entries.push({ category, itemCode, itemName, openingQty, purchaseQty });
+    entries.push({ category, itemCode, itemName, openingQty, purchaseQty, damagedQty });
   }
 
   try {
@@ -1767,19 +1805,20 @@ app.put('/api/profitability/at-stock/:date', async (req, res) => {
       }
       const unitWeight = entry.category === 'AT' ? packWeightKg : 1;
       const openingBaseQty = entry.openingQty === null ? null : entry.openingQty * unitWeight;
-      const purchaseBaseQty = entry.purchaseQty === null ? 0 : entry.purchaseQty * unitWeight;
+      const purchaseBaseQty = entry.purchaseQty * unitWeight;
+      const damagedBaseQty = entry.damagedQty * unitWeight;
       await db.run(
         `INSERT INTO at_stock_daily
-           (company_id, stock_date, sales_category, item_code, item_name, opening_qty, purchase_qty)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+           (company_id, stock_date, sales_category, item_code, item_name, opening_qty, purchase_qty, damaged_qty)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(company_id, stock_date, sales_category, item_code, item_name)
          DO UPDATE SET
            opening_qty = COALESCE(excluded.opening_qty, at_stock_daily.opening_qty),
-           purchase_qty = CASE WHEN ? IS NULL
-             THEN at_stock_daily.purchase_qty ELSE excluded.purchase_qty END`,
+           purchase_qty = excluded.purchase_qty,
+           damaged_qty = excluded.damaged_qty`,
         [
           req.user.companyId, selectedDate, entry.category, entry.itemCode, entry.itemName,
-          openingBaseQty, purchaseBaseQty, entry.purchaseQty
+          openingBaseQty, purchaseBaseQty, damagedBaseQty
         ]
       );
     }
@@ -1860,6 +1899,19 @@ app.get('/api/profitability/at-assignment', async (req, res) => {
     const result = [...agents.values()]
       .map(agent => ({ ...agent, items: agent.items.sort((a, b) => a.category.localeCompare(b.category) || a.displayName.localeCompare(b.displayName)) }))
       .sort((a, b) => (a.agentId === null) - (b.agentId === null) || a.agentName.localeCompare(b.agentName));
+    if (req.query.format === 'xlsx') {
+      return sendXlsx(res, createWorkbook([{
+        name: 'AT Assignment',
+        rows: [
+          ['Delivery agent', 'Category', 'Product', 'Quantity', 'Bills'],
+          ...result.flatMap(agent => agent.items.map(item => [
+            agent.agentName, item.category, item.displayName,
+            formatAtQuantity(item, item.quantity, false), item.billCount
+          ]))
+        ],
+        autoFilterRow: 1
+      }]), `AT-Assignment-${selectedDate}.xlsx`);
+    }
     res.json({ date: selectedDate, agents: result });
   } catch (error) {
     console.error('AT assignment report failed:', error);
