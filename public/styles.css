@@ -246,14 +246,6 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .damage-date-field { margin: -4px 0 14px; }
 .damage-date-field input { color: #6a756e; background: #f6f8f6; }
 .damage-history-heading h3 span { color: #89938d; font-size: 9px; font-weight: 500; }
-.damage-photo-picker { display: grid; min-height: 118px; justify-items: center; align-content: center; gap: 7px; padding: 15px; border: 1px dashed #d6c4ad; border-radius: 8px; color: #536159; background: #fdfaf6; text-align: center; cursor: pointer; }
-.damage-photo-picker:hover { border-color: #b98b54; background: #fff7eb; }
-.damage-photo-icon { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid #eadcc9; border-radius: 8px; color: #9a682e; background: #fff; font-size: 22px; font-weight: 400; line-height: 1; }
-.damage-photo-picker strong { font-size: 11px; font-weight: 600; }
-.damage-photo-picker > span:last-child { color: #8d9791; font-size: 9px; line-height: 1.5; }
-.damage-photo-preview-wrap { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-top: 10px; color: #64716a; font-size: 9px; }
-.damage-photo-preview-wrap img { width: 58px; height: 58px; border-radius: 6px; background: #f0f2f0; object-fit: cover; }
-.damage-photo-preview-wrap > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .damage-report-history { margin-top: 23px; padding-top: 16px; border-top: 1px solid #edf0ee; }
 .damage-history-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .damage-history-heading h3 { margin: 0; color: #46534c; font-size: 11px; font-weight: 600; }
@@ -275,7 +267,7 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .damage-entry-month { width: 128px; height: 30px; padding: 0 5px; border: 1px solid #e3e8e4; border-radius: 5px; color: #445149; background: #fff; font-size: 9px; }
 .damage-review-note { min-width: 0; flex: 1; height: 30px; padding: 0 7px; border: 1px solid #e3e8e4; border-radius: 5px; font-size: 9px; }
 .damage-report-review .button { min-height: 30px; padding: 0 8px; font-size: 9px; }
-.damage-photo-existing { margin: 8px 0 0; color: #738077; font-size: 9px; }
+.damage-report-no-photo { grid-template-columns: minmax(0, 1fr) auto; }
 .damage-history-actions { display: flex; align-items: center; gap: 9px; }
 .damage-history-actions .button { min-height: 29px; padding: 0 8px; font-size: 9px; }
 .damage-history-empty { margin: 0; padding: 12px; color: #89938d; font-size: 9px; text-align: center; }

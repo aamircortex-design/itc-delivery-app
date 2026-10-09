@@ -51,16 +51,7 @@ const upload = multer({
     callback(new Error('Choose an Excel (.xlsx) or CSV file.'));
   }
 });
-const damagePhotoUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024, files: 1 },
-  fileFilter: (req, file, callback) => {
-    if (['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) {
-      return callback(null, true);
-    }
-    callback(new Error('Choose a JPEG, PNG, or WebP photo.'));
-  }
-});
+const damageReportFormData = multer({ limits: { fields: 4, fieldSize: 1024 } });
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
@@ -83,26 +74,6 @@ function getCookieValue(req, name) {
 
 function getSessionTokenHash(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
-}
-
-function getSupportedImageType(buffer) {
-  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-    return 'image/jpeg';
-  }
-  if (
-    buffer.length >= 8 &&
-    buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-  ) {
-    return 'image/png';
-  }
-  if (
-    buffer.length >= 12 &&
-    buffer.toString('ascii', 0, 4) === 'RIFF' &&
-    buffer.toString('ascii', 8, 12) === 'WEBP'
-  ) {
-    return 'image/webp';
-  }
-  return null;
 }
 
 function setSessionCookie(res, token) {
@@ -547,6 +518,7 @@ app.get('/api/rt-damage', async (req, res) => {
               COALESCE(reviewer.full_name, '') AS reviewedBy,
               rt_damage_reports.created_at AS createdAt,
               rt_damage_reports.user_id AS submittedById,
+              length(rt_damage_reports.photo_data) > 0 AS hasPhoto,
               COALESCE(users.full_name, 'Former team member') AS submittedBy
        FROM rt_damage_reports
        LEFT JOIN users ON users.id = rt_damage_reports.user_id
@@ -576,7 +548,7 @@ app.get('/api/rt-damage/export', async (req, res) => {
               r.agent_name AS agentName, r.damage_date AS damageDate,
               r.approval_status AS approvalStatus, r.rt_entry_month AS rtEntryMonth,
               r.reviewed_at AS reviewedAt,
-              r.review_note AS reviewNote,
+              r.review_note AS reviewNote, length(r.photo_data) > 0 AS hasPhoto,
               COALESCE(submitter.full_name, 'Former team member') AS submittedBy,
               COALESCE(reviewer.full_name, '') AS reviewedBy, r.created_at AS createdAt
        FROM rt_damage_reports r
@@ -605,7 +577,7 @@ app.get('/api/rt-damage/export', async (req, res) => {
       report.reviewedAt || '',
       report.reviewNote,
       report.createdAt,
-      `${req.protocol}://${req.get('host')}/api/rt-damage/${report.id}/photo`
+      report.hasPhoto ? `${req.protocol}://${req.get('host')}/api/rt-damage/${report.id}/photo` : ''
     ])];
     const workbook = createWorkbook([{
       name: 'RT Damage Reports',
@@ -636,7 +608,7 @@ app.get('/api/rt-damage/:id/photo', async (req, res) => {
        FROM rt_damage_reports WHERE id = ? AND company_id = ?`,
       [reportId, req.user.companyId]
     );
-    if (!photo) return res.status(404).json({ error: 'RT damage photo not found.' });
+    if (!photo || !photo.data?.length) return res.status(404).json({ error: 'RT damage photo not found.' });
     res.set({
       'Cache-Control': 'no-store',
       'Content-Type': photo.mimeType,
@@ -649,7 +621,7 @@ app.get('/api/rt-damage/:id/photo', async (req, res) => {
   }
 });
 
-app.post('/api/rt-damage', damagePhotoUpload.single('photo'), async (req, res) => {
+app.post('/api/rt-damage', damageReportFormData.none(), async (req, res) => {
   const rtNumber = String(req.body.rtNumber || '').trim();
   const outletName = String(req.body.outletName || '').trim();
   const damageDate = normalizeDeliveryDate(req.body.damageDate);
@@ -662,20 +634,12 @@ app.post('/api/rt-damage', damagePhotoUpload.single('photo'), async (req, res) =
   if (!damageDate) {
     return res.status(400).json({ error: 'Choose a valid date for the RT damage report.' });
   }
-  if (!req.file) {
-    return res.status(400).json({ error: 'Take or choose a photo of the damaged stock.' });
-  }
-  const mimeType = getSupportedImageType(req.file.buffer);
-  if (!mimeType) {
-    return res.status(400).json({ error: 'The selected file is not a valid JPEG, PNG, or WebP photo.' });
-  }
-
   try {
     const result = await req.app.locals.db.run(
       `INSERT INTO rt_damage_reports
          (company_id, user_id, rt_number, outlet_name, agent_name, damage_date, photo_mime_type, photo_data)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [req.user.companyId, req.user.id, rtNumber, outletName, req.user.fullName, damageDate, mimeType, req.file.buffer]
+       VALUES (?, ?, ?, ?, ?, ?, 'image/jpeg', X'')`,
+      [req.user.companyId, req.user.id, rtNumber, outletName, req.user.fullName, damageDate]
     );
     res.status(201).json({ message: 'RT damage report submitted for manager approval.', id: result.lastID });
   } catch (error) {
@@ -684,7 +648,7 @@ app.post('/api/rt-damage', damagePhotoUpload.single('photo'), async (req, res) =
   }
 });
 
-app.put('/api/rt-damage/:id', damagePhotoUpload.single('photo'), async (req, res) => {
+app.put('/api/rt-damage/:id', damageReportFormData.none(), async (req, res) => {
   const reportId = Number(req.params.id);
   const rtNumber = String(req.body.rtNumber || '').trim();
   const outletName = String(req.body.outletName || '').trim();
@@ -701,18 +665,12 @@ app.put('/api/rt-damage/:id', damagePhotoUpload.single('photo'), async (req, res
   if (!damageDate) {
     return res.status(400).json({ error: 'Choose a valid date for the RT damage report.' });
   }
-  const mimeType = req.file ? getSupportedImageType(req.file.buffer) : null;
-  if (req.file && !mimeType) {
-    return res.status(400).json({ error: 'The selected file is not a valid JPEG, PNG, or WebP photo.' });
-  }
   try {
     const result = await req.app.locals.db.run(
       `UPDATE rt_damage_reports
-       SET rt_number = ?, outlet_name = ?, agent_name = ?, damage_date = ?,
-           photo_mime_type = COALESCE(?, photo_mime_type),
-           photo_data = COALESCE(?, photo_data)
+       SET rt_number = ?, outlet_name = ?, agent_name = ?, damage_date = ?
        WHERE id = ? AND company_id = ? AND user_id = ? AND approval_status = 'Pending'`,
-      [rtNumber, outletName, req.user.fullName, damageDate, mimeType, req.file?.buffer || null, reportId, req.user.companyId, req.user.id]
+      [rtNumber, outletName, req.user.fullName, damageDate, reportId, req.user.companyId, req.user.id]
     );
     if (!result.changes) {
       return res.status(409).json({ error: 'Only your pending RT damage report can be edited. Ask an admin to reopen an approved or rejected report.' });

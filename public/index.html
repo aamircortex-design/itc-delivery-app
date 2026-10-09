@@ -361,7 +361,7 @@
       <form method="dialog" class="dialog-close-form"><button class="dialog-close" aria-label="Close RT damage" value="cancel" type="submit">×</button></form>
       <div class="modal-icon damage-modal-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7.5h3l1.4-2h7.2l1.4 2h3A1.5 1.5 0 0 1 21.5 9v9a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 18V9A1.5 1.5 0 0 1 4 7.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.2" stroke="currentColor" stroke-width="1.6"/></svg></div>
       <h2 id="rt-damage-title">Report RT damage</h2>
-      <p class="modal-description">Enter the RT number and attach a photo of the damaged stock received from the outlet.</p>
+      <p class="modal-description">Enter the RT date, outlet name, and RT number. The report will go to a manager for approval.</p>
       <form id="rt-damage-form">
         <label class="date-field damage-date-field" for="rt-damage-date">
           <span>RT date</span>
@@ -379,18 +379,6 @@
           <span>RT number</span>
           <input id="rt-number-input" name="rtNumber" type="text" maxlength="64" placeholder="Enter RT number" required>
         </label>
-        <label class="damage-photo-picker" for="rt-damage-photo">
-          <span class="damage-photo-icon" aria-hidden="true">+</span>
-          <strong>Take or choose a photo</strong>
-          <span>Allow camera access when your phone asks. Photos up to 8 MB (JPEG, PNG, or WebP).</span>
-        </label>
-        <p class="damage-photo-existing" id="rt-existing-photo-note" hidden>Existing photo will be kept unless you choose a new one.</p>
-        <input class="visually-hidden" id="rt-damage-photo" name="photo" type="file" accept="image/*" capture="environment" required>
-        <div class="damage-photo-preview-wrap" id="damage-photo-preview-wrap" hidden>
-          <img id="damage-photo-preview" alt="Preview of damaged stock photo">
-          <span id="damage-photo-name"></span>
-          <button class="text-link" id="remove-damage-photo" type="button">Remove photo</button>
-        </div>
         <div class="dialog-error" id="rt-damage-error" role="alert" hidden></div>
         <div class="modal-actions">
           <button class="button button-secondary" id="cancel-edit-rt-damage" type="button" hidden>Cancel edit</button>

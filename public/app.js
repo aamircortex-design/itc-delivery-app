@@ -8,7 +8,6 @@ const uploadError = document.querySelector('#upload-error');
 const reconcileForm = document.querySelector('#reconcile-form');
 const damageDialog = document.querySelector('#rt-damage-dialog');
 const damageForm = document.querySelector('#rt-damage-form');
-const damagePhotoInput = document.querySelector('#rt-damage-photo');
 const exportButton = document.querySelector('#export-day');
 const toast = document.querySelector('#toast');
 
@@ -1072,10 +1071,10 @@ async function loadDamageReports() {
         ? `<button class="text-link" type="button" data-reopen-damage="${Number(report.id)}">Reopen for correction</button>`
         : '';
       return `
-        <article class="damage-report">
-          <a class="damage-report-photo-link" href="/api/rt-damage/${Number(report.id)}/photo" target="_blank" rel="noopener">
+        <article class="damage-report${report.hasPhoto ? '' : ' damage-report-no-photo'}">
+          ${report.hasPhoto ? `<a class="damage-report-photo-link" href="/api/rt-damage/${Number(report.id)}/photo" target="_blank" rel="noopener">
             <img src="/api/rt-damage/${Number(report.id)}/photo" alt="Damaged stock for RT ${escapeHtml(report.rtNumber)}" loading="lazy">
-          </a>
+          </a>` : ''}
           <span class="damage-report-details">
             <strong>RT ${escapeHtml(report.rtNumber)} · ${escapeHtml(report.outletName || 'Outlet not recorded')}</strong>
             <span>Agent: ${escapeHtml(report.agentName || 'Not recorded')} · Submitted by ${escapeHtml(report.submittedBy)} · ${escapeHtml(formatDate(report.createdAt))}</span>
@@ -1095,7 +1094,6 @@ async function loadDamageReports() {
 
 function openDamageDialog() {
   resetDamageForm();
-  clearDamagePhoto();
   document.querySelector('#rt-damage-error').hidden = true;
   document.querySelector('#rt-damage-error').textContent = '';
   damageDialog.showModal();
@@ -1107,8 +1105,6 @@ function resetDamageForm() {
   damageForm.reset();
   document.querySelector('#rt-damage-date').value = selectedDeliveryDate || getLocalDateValue();
   document.querySelector('#rt-agent-input').value = currentUser?.fullName || '';
-  document.querySelector('#rt-damage-photo').required = true;
-  document.querySelector('#rt-existing-photo-note').hidden = true;
   document.querySelector('#cancel-edit-rt-damage').hidden = true;
   document.querySelector('#save-rt-damage').textContent = 'Save report';
 }
@@ -1126,47 +1122,12 @@ function editDamageReport(reportId) {
     document.querySelector('#rt-agent-input').value = report.agentName;
     document.querySelector('#rt-number-input').value = report.rtNumber;
     document.querySelector('#rt-damage-date').value = report.damageDate;
-    document.querySelector('#rt-damage-photo').required = false;
-    document.querySelector('#rt-existing-photo-note').hidden = false;
     document.querySelector('#cancel-edit-rt-damage').hidden = false;
     document.querySelector('#save-rt-damage').textContent = 'Save changes';
     document.querySelector('#rt-damage-error').hidden = true;
     document.querySelector('#rt-damage-error').textContent = '';
     damageDialog.scrollTo({ top: 0, behavior: 'smooth' });
   }).catch(error => showToast(error.message, true));
-}
-
-function clearDamagePhoto() {
-  const preview = document.querySelector('#damage-photo-preview');
-  if (preview.src.startsWith('blob:')) URL.revokeObjectURL(preview.src);
-  preview.removeAttribute('src');
-  document.querySelector('#damage-photo-name').textContent = '';
-  document.querySelector('#damage-photo-preview-wrap').hidden = true;
-  damagePhotoInput.value = '';
-}
-
-function previewDamagePhoto(file) {
-  const error = document.querySelector('#rt-damage-error');
-  error.hidden = true;
-  if (!file) return;
-  if (file.size > 8 * 1024 * 1024) {
-    clearDamagePhoto();
-    error.textContent = 'This photo is larger than 8 MB. Please choose a smaller photo.';
-    error.hidden = false;
-    return;
-  }
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-    clearDamagePhoto();
-    error.textContent = 'Choose a JPEG, PNG, or WebP photo.';
-    error.hidden = false;
-    return;
-  }
-
-  const preview = document.querySelector('#damage-photo-preview');
-  if (preview.src.startsWith('blob:')) URL.revokeObjectURL(preview.src);
-  preview.src = URL.createObjectURL(file);
-  document.querySelector('#damage-photo-name').textContent = file.name;
-  document.querySelector('#damage-photo-preview-wrap').hidden = false;
 }
 
 async function saveDamageReport(event) {
@@ -1193,7 +1154,6 @@ async function saveDamageReport(event) {
     const rtNumber = document.querySelector('#rt-number-input').value.trim();
     resetDamageForm();
     document.querySelector('#rt-damage-date').value = damageDate;
-    clearDamagePhoto();
     await loadDamageReports();
     showToast(result.message || `Damage report saved for RT ${rtNumber}.`);
   } catch (requestError) {
@@ -1229,7 +1189,6 @@ document.querySelector('#open-rt-damage').addEventListener('click', openDamageDi
 document.querySelector('#cancel-rt-damage').addEventListener('click', () => damageDialog.close());
 document.querySelector('#cancel-edit-rt-damage').addEventListener('click', () => {
   resetDamageForm();
-  clearDamagePhoto();
 });
 document.querySelector('#refresh-damage-reports').addEventListener('click', loadDamageReports);
 document.querySelector('#rt-damage-date').addEventListener('change', loadDamageReports);
@@ -1242,8 +1201,6 @@ document.querySelector('#export-rt-damage').addEventListener('click', event => {
   const date = encodeURIComponent(damageDate);
   downloadExcelReport(`/api/rt-damage/export?date=${date}`, `RT-Damage-${damageDate}.xlsx`, event.currentTarget);
 });
-document.querySelector('#remove-damage-photo').addEventListener('click', clearDamagePhoto);
-damagePhotoInput.addEventListener('change', () => previewDamagePhoto(damagePhotoInput.files[0]));
 damageForm.addEventListener('submit', saveDamageReport);
 document.querySelector('#damage-report-list').addEventListener('click', async event => {
   const editButton = event.target.closest('[data-edit-damage]');
@@ -1293,7 +1250,6 @@ document.querySelector('#damage-report-list').addEventListener('click', async ev
 });
 damageDialog.addEventListener('close', () => {
   resetDamageForm();
-  clearDamagePhoto();
 });
 document.querySelectorAll('[data-logout]').forEach(button => button.addEventListener('click', signOut));
 document.querySelector('#cancel-upload').addEventListener('click', () => uploadDialog.close());
