@@ -1639,19 +1639,21 @@ app.post('/api/profitability/product-costs', upload.single('file'), async (req, 
 const AT_EXTRA_PRODUCTS = [
   { category: 'AT', itemCode: '', itemName: 'ATTA SELECT 5KG' },
   { category: 'AT', itemCode: '', itemName: 'ATTA MULTIGRAINS 5KG' },
-  { category: 'AT', itemCode: '', itemName: 'GRAM FLOUR 200G' },
+  { category: 'BC', itemCode: '', itemName: 'GRAM FLOUR 200G' },
   { category: 'AT', itemCode: '', itemName: 'ATTA SRC 1KG' }
 ];
 
 function canonicalAtProduct(product) {
-  if (product.category !== 'AT') return product;
   const name = String(product.itemName || '').toUpperCase();
+  if (/GRAM FLOUR|BESAN/.test(name) && getAtPackWeightKg(product.itemName) === 0.2) {
+    return { ...product, category: 'BC', itemCode: '', itemName: 'GRAM FLOUR 200G' };
+  }
+  if (product.category !== 'AT') return product;
   const weight = getAtPackWeightKg(product.itemName);
   const merged = itemName => ({ ...product, itemCode: '', itemName });
   if (weight === 2) return merged('ATTA 2KG');
   if (weight === 5 && /SELECT/.test(name)) return merged('ATTA SELECT 5KG');
   if (weight === 5 && /MULTIGRAIN/.test(name)) return merged('ATTA MULTIGRAINS 5KG');
-  if (weight === 0.2 && /GRAM FLOUR|BESAN/.test(name)) return merged('GRAM FLOUR 200G');
   if (/\bSRC\b|SUGAR RELEASE|SUGRA RELEASE/.test(name)) return merged('ATTA SRC 1KG');
   return product;
 }
