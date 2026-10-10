@@ -1633,8 +1633,19 @@ app.post('/api/profitability/product-costs', upload.single('file'), async (req, 
   }
 });
 
-const atProductKey = row =>
-  `${row.category}\u0000${String(row.itemCode || '').trim().toLowerCase()}\u0000${String(row.itemName || '').trim().toLowerCase()}`;
+// All 2 kg atta packs are the same stock regardless of variant or code.
+function canonicalAtProduct(product) {
+  const category = product.category;
+  if (category === 'AT' && getAtPackWeightKg(product.itemName) === 2) {
+    return { ...product, itemCode: '', itemName: 'ATTA 2KG' };
+  }
+  return product;
+}
+
+const atProductKey = row => {
+  const product = canonicalAtProduct(row);
+  return `${product.category}\u0000${String(product.itemCode || '').trim().toLowerCase()}\u0000${String(product.itemName || '').trim().toLowerCase()}`;
+};
 
 async function loadAtAssignmentRows(db, companyId, date) {
   return db.all(
@@ -1686,6 +1697,25 @@ async function getLockedAtProducts(db, companyId, date) {
   return locked;
 }
 
+// Old per-variant rows for a merged 2 kg product are folded into the canonical row.
+async function clearAtVariantRows(db, companyId, date, product, clearOpening = true) {
+  if (product.itemName !== 'ATTA 2KG') return;
+  const rows = await db.all(
+    `SELECT item_code AS itemCode, item_name AS itemName FROM at_stock_daily
+     WHERE company_id = ? AND stock_date = ? AND UPPER(TRIM(sales_category)) = 'AT'`,
+    [companyId, date]
+  );
+  for (const row of rows) {
+    if (row.itemName === product.itemName && row.itemCode === product.itemCode) continue;
+    if (atProductKey({ category: 'AT', ...row }) !== atProductKey(product)) continue;
+    await db.run(
+      `UPDATE at_stock_daily SET ${clearOpening ? 'opening_qty = NULL, ' : ''}purchase_qty = 0, damaged_qty = 0, tallied = 0
+       WHERE company_id = ? AND stock_date = ? AND sales_category = ? AND item_code = ? AND item_name = ?`,
+      [companyId, date, 'AT', row.itemCode, row.itemName]
+    );
+  }
+}
+
 app.get('/api/profitability/at-stock', async (req, res) => {
   if (!['admin', 'manager'].includes(req.user.role)) {
     return res.status(403).json({ error: 'Administrator or manager access is required for AT stock.' });
@@ -1727,23 +1757,45 @@ app.get('/api/profitability/at-stock', async (req, res) => {
       [req.user.companyId, selectedDate]
     );
 
-    const getProductKey = row =>
-      `${row.category}\u0000${String(row.itemCode || '').toLowerCase()}\u0000${String(row.itemName || '').toLowerCase()}`;
+    const getProductKey = atProductKey;
     const salesByProduct = new Map();
     for (const row of salesRows) {
       const key = getProductKey(row);
       if (!salesByProduct.has(key)) salesByProduct.set(key, new Map());
-      salesByProduct.get(key).set(row.stockDate, row);
+      const byDate = salesByProduct.get(key);
+      const existing = byDate.get(row.stockDate);
+      if (existing) {
+        existing.salesQty = Number(existing.salesQty || 0) + Number(row.salesQty || 0);
+        existing.returnQty = Number(existing.returnQty || 0) + Number(row.returnQty || 0);
+      } else {
+        byDate.set(row.stockDate, { ...row, salesQty: Number(row.salesQty || 0), returnQty: Number(row.returnQty || 0) });
+      }
     }
     const stockByProduct = new Map();
     for (const row of stockRows) {
       const key = getProductKey(row);
       if (!stockByProduct.has(key)) stockByProduct.set(key, new Map());
-      stockByProduct.get(key).set(row.stockDate, row);
+      const byDate = stockByProduct.get(key);
+      const existing = byDate.get(row.stockDate);
+      if (existing) {
+        if (row.openingQty !== null && row.openingQty !== undefined) {
+          existing.openingQty = Number(existing.openingQty || 0) + Number(row.openingQty);
+        }
+        existing.purchaseQty = Number(existing.purchaseQty || 0) + Number(row.purchaseQty || 0);
+        existing.damagedQty = Number(existing.damagedQty || 0) + Number(row.damagedQty || 0);
+        existing.tallied = existing.tallied || row.tallied;
+      } else {
+        byDate.set(row.stockDate, { ...row });
+      }
     }
 
     const lockedProducts = await getLockedAtProducts(req.app.locals.db, req.user.companyId, selectedDate);
-    const rows = products.map(product => {
+    const uniqueProducts = new Map();
+    for (const product of products) {
+      const canonical = canonicalAtProduct(product);
+      uniqueProducts.set(atProductKey(canonical), canonical);
+    }
+    const rows = [...uniqueProducts.values()].map(product => {
       const key = getProductKey(product);
       const sales = salesByProduct.get(key) || new Map();
       const stock = stockByProduct.get(key) || new Map();
@@ -1830,7 +1882,8 @@ app.put('/api/profitability/at-stock/:date', async (req, res) => {
     ) {
       return res.status(400).json({ error: 'Opening stock and purchases must be valid non-negative quantities.' });
     }
-    entries.push({ category, itemCode, itemName, openingQty, purchaseQty, damagedQty });
+    const product = canonicalAtProduct({ category, itemCode, itemName });
+    entries.push({ ...product, openingQty, purchaseQty, damagedQty });
   }
 
   try {
@@ -1847,8 +1900,7 @@ app.put('/api/profitability/at-stock/:date', async (req, res) => {
        WHERE company_id = ?`,
       [req.user.companyId, req.user.companyId]
     );
-    const productKey = product =>
-      `${product.category}\u0000${String(product.itemCode || '').toLowerCase()}\u0000${String(product.itemName || '').toLowerCase()}`;
+    const productKey = atProductKey;
     const knownProductKeys = new Set(knownProducts.map(productKey));
     const lockedProducts = req.user.role === 'admin' ? new Set() : await getLockedAtProducts(db, req.user.companyId, selectedDate);
     for (const entry of entries) {
@@ -1878,6 +1930,7 @@ app.put('/api/profitability/at-stock/:date', async (req, res) => {
           openingBaseQty, purchaseBaseQty, damagedBaseQty
         ]
       );
+      await clearAtVariantRows(db, req.user.companyId, selectedDate, entry, entry.openingQty !== null);
     }
     res.json({ message: 'AT stock updated.' });
   } catch (error) {
@@ -1899,12 +1952,14 @@ app.patch('/api/profitability/at-stock/:date/tallied', async (req, res) => {
   }
   try {
     const db = req.app.locals.db;
-    const known = await db.get(
-      `SELECT 1 FROM profitability_sales
-       WHERE company_id = ? AND TRIM(item_name) = ? AND TRIM(item_code) = ? LIMIT 1`,
-      [req.user.companyId, itemName, itemCode]
-    );
+    const known = (await db.all(
+      `SELECT DISTINCT CASE WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' ELSE 'BC' END AS category,
+              TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName
+       FROM profitability_sales WHERE company_id = ?`,
+      [req.user.companyId]
+    )).some(row => atProductKey(row) === atProductKey({ category, itemCode, itemName }));
     if (!known) return res.status(400).json({ error: 'This product is not in the uploaded sales data.' });
+    const product = canonicalAtProduct({ category, itemCode, itemName });
     if (req.user.role !== 'admin') {
       const locked = await getLockedAtProducts(db, req.user.companyId, selectedDate);
       if (locked.has(atProductKey({ category, itemCode, itemName }))) {
@@ -1916,8 +1971,9 @@ app.patch('/api/profitability/at-stock/:date/tallied', async (req, res) => {
        VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(company_id, stock_date, sales_category, item_code, item_name)
        DO UPDATE SET tallied = excluded.tallied`,
-      [req.user.companyId, selectedDate, category, itemCode, itemName, req.body.tallied ? 1 : 0]
+      [req.user.companyId, selectedDate, product.category, product.itemCode, product.itemName, req.body.tallied ? 1 : 0]
     );
+    await clearAtVariantRows(db, req.user.companyId, selectedDate, product, false);
     res.json({ tallied: req.body.tallied });
   } catch (error) {
     console.error('AT tallied update failed:', error);
