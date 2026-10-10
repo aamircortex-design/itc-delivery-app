@@ -1765,7 +1765,8 @@ app.get('/api/profitability/at-stock', async (req, res) => {
     const stockRows = await req.app.locals.db.all(
       `SELECT stock_date AS stockDate, UPPER(TRIM(sales_category)) AS category,
               TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName,
-              opening_qty AS openingQty, purchase_qty AS purchaseQty, damaged_qty AS damagedQty, tallied
+              opening_qty AS openingQty, purchase_qty AS purchaseQty, damaged_qty AS damagedQty, tallied,
+              opening_bags_input AS openingBags, opening_pcs_input AS openingPcs
        FROM at_stock_daily
        WHERE company_id = ? AND stock_date <= ?`,
       [req.user.companyId, selectedDate]
@@ -1832,7 +1833,14 @@ app.get('/api/profitability/at-stock', async (req, res) => {
         const damagedQty = Number(stockEntry?.damagedQty || 0);
         onHand = opening + purchaseQty + returnQty - salesQty - damagedQty;
         if (date === selectedDate) {
-          selectedDay = { openingQty: opening, purchaseQty, damagedQty, salesQty, returnQty, closingQty: onHand, tallied: Boolean(stockEntry?.tallied) };
+          const unitForInput = product.category === 'AT' ? (getAtPackWeightKg(product.itemName) || 1) : 1;
+          const rawMatches = hasOpening && stockEntry.openingBags !== null && stockEntry.openingBags !== undefined &&
+            Math.abs(stockEntry.openingBags * 30 + stockEntry.openingPcs * unitForInput - opening) < 0.001;
+          selectedDay = {
+            openingQty: opening, purchaseQty, damagedQty, salesQty, returnQty, closingQty: onHand,
+            tallied: Boolean(stockEntry?.tallied),
+            openingInput: rawMatches ? { bags: stockEntry.openingBags, pcs: stockEntry.openingPcs } : null
+          };
         }
       }
       const packWeightKg = product.category === 'AT' ? getAtPackWeightKg(product.itemName) : null;
@@ -1897,7 +1905,11 @@ app.put('/api/profitability/at-stock/:date', async (req, res) => {
       return res.status(400).json({ error: 'Opening stock and purchases must be valid non-negative quantities.' });
     }
     const product = canonicalAtProduct({ category, itemCode, itemName });
-    entries.push({ ...product, openingQty, purchaseQty, damagedQty });
+    const validInput = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1000000000;
+    const openingInput = canEditOpening && category === 'AT' && validInput(entry.openingBags) && validInput(entry.openingPcs)
+      ? { bags: entry.openingBags, pcs: entry.openingPcs }
+      : null;
+    entries.push({ ...product, openingQty, purchaseQty, damagedQty, openingInput });
   }
 
   try {
@@ -1926,22 +1938,25 @@ app.put('/api/profitability/at-stock/:date', async (req, res) => {
       if (entry.category === 'AT' && !packWeightKg) {
         return res.status(400).json({ error: `The item name "${entry.itemName}" must include a pack weight up to 30 kg.` });
       }
-      const unitWeight = entry.category === 'AT' ? packWeightKg : 1;
-      const openingBaseQty = entry.openingQty === null ? null : entry.openingQty * unitWeight;
-      const purchaseBaseQty = entry.purchaseQty * unitWeight;
-      const damagedBaseQty = entry.damagedQty * unitWeight;
+      // The client already sends AT quantities in kg.
+      const openingBaseQty = entry.openingQty;
+      const purchaseBaseQty = entry.purchaseQty;
+      const damagedBaseQty = entry.damagedQty;
       await db.run(
         `INSERT INTO at_stock_daily
-           (company_id, stock_date, sales_category, item_code, item_name, opening_qty, purchase_qty, damaged_qty)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           (company_id, stock_date, sales_category, item_code, item_name, opening_qty, purchase_qty, damaged_qty, opening_bags_input, opening_pcs_input)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(company_id, stock_date, sales_category, item_code, item_name)
          DO UPDATE SET
            opening_qty = COALESCE(excluded.opening_qty, at_stock_daily.opening_qty),
+           opening_bags_input = CASE WHEN excluded.opening_qty IS NULL THEN at_stock_daily.opening_bags_input ELSE excluded.opening_bags_input END,
+           opening_pcs_input = CASE WHEN excluded.opening_qty IS NULL THEN at_stock_daily.opening_pcs_input ELSE excluded.opening_pcs_input END,
            purchase_qty = excluded.purchase_qty,
            damaged_qty = excluded.damaged_qty`,
         [
           req.user.companyId, selectedDate, entry.category, entry.itemCode, entry.itemName,
-          openingBaseQty, purchaseBaseQty, damagedBaseQty
+          openingBaseQty, purchaseBaseQty, damagedBaseQty,
+          entry.openingInput?.bags ?? null, entry.openingInput?.pcs ?? null
         ]
       );
       await clearAtVariantRows(db, req.user.companyId, selectedDate, entry, entry.openingQty !== null);

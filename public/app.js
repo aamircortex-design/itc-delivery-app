@@ -615,7 +615,7 @@ function formatAtStockQuantity(quantityKg, packWeightKg) {
   return `${formatStockNumber(bags)} bags, ${formatStockNumber(loosePieces)} pcs`;
 }
 
-function renderStockEntryInputs(row, field, baseQuantity, editable) {
+function renderStockEntryInputs(row, field, baseQuantity, editable, rawCount = null) {
   const disabled = !editable || (row.category === 'AT' && !row.packWeightKg);
   if (row.category === 'BC') {
     return `<label class="at-stock-input"><span class="visually-hidden">${field} pieces for ${escapeHtml(row.itemName)}</span>
@@ -623,14 +623,7 @@ function renderStockEntryInputs(row, field, baseQuantity, editable) {
       <span>pcs</span></label>`;
   }
   if (!row.packWeightKg) return '<span class="at-stock-missing-pack">Add kg pack size to item name</span>';
-  if (row.packWeightKg >= 5) {
-    return `<div class="at-stock-units">
-    <label class="at-stock-input"><span class="visually-hidden">${field} pieces for ${escapeHtml(row.itemName)}</span>
-      <input type="number" min="0" step="any" data-stock-${field}-pcs value="${formatStockNumber(Math.round(baseQuantity / row.packWeightKg * 100) / 100)}" ${disabled ? 'disabled' : ''}>
-      <span>pcs</span></label>
-  </div>`;
-  }
-  const count = getBagAndPieceCounts(baseQuantity, row.packWeightKg);
+  const count = rawCount || getBagAndPieceCounts(baseQuantity, row.packWeightKg);
   return `<div class="at-stock-units">
     <label class="at-stock-input"><span class="visually-hidden">${field} 30 kg bags for ${escapeHtml(row.itemName)}</span>
       <input type="number" min="0" step="any" data-stock-${field}-bags value="${formatStockNumber(count.bags)}" ${disabled ? 'disabled' : ''}>
@@ -655,7 +648,7 @@ function renderAtStockReport(report) {
     data-stock-pack-weight="${row.packWeightKg || ''}">
     <td data-label="Category">${escapeHtml(row.category)}</td>
     <td data-label="Product" title="${escapeHtml(row.itemName)}">${escapeHtml(row.displayName || row.itemName)}</td>
-    <td data-label="Opening">${renderStockEntryInputs(row, 'opening', row.openingQty, canEditOpening)}</td>
+    <td data-label="Opening">${renderStockEntryInputs(row, 'opening', row.openingQty, canEditOpening, row.openingInput ? { bags: row.openingInput.bags, loosePieces: row.openingInput.pcs } : null)}</td>
     <td data-label="Sales">${row.category === 'AT' ? formatAtStockQuantity(row.salesQty, row.packWeightKg) : `${formatStockNumber(row.salesQty)} pcs`}</td>
     <td data-label="Sales return">${row.category === 'AT' ? formatAtStockQuantity(row.returnQty, row.packWeightKg) : `${formatStockNumber(row.returnQty)} pcs`}</td>
     <td data-label="Purchase">${renderStockEntryInputs(row, 'purchase', row.purchaseQty, canEditRow)}</td>
@@ -708,11 +701,16 @@ async function saveAtStock() {
       ? (row.querySelector(`[data-stock-${field}-bags]`) ? readInput(`[data-stock-${field}-bags]`) * 30 : 0) +
         readInput(`[data-stock-${field}-pcs]`) * weight
       : readInput(`[data-stock-${field}-pcs]`);
+    const openingInput = category === 'AT' && currentUser.role === 'admin' && row.querySelector('[data-stock-opening-bags]')
+      ? { bags: readInput('[data-stock-opening-bags]'), pcs: readInput('[data-stock-opening-pcs]') }
+      : null;
     return {
       category,
       itemCode: row.dataset.stockCode,
       itemName: row.dataset.stockName,
       openingQty: currentUser.role === 'admin' ? getQuantity('opening') : null,
+      openingBags: openingInput?.bags,
+      openingPcs: openingInput?.pcs,
       purchaseQty: getQuantity('purchase'),
       damagedQty: getQuantity('damaged')
     };

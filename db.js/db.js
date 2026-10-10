@@ -275,6 +275,10 @@ async function initDb() {
   if (!atStockColumns.some(column => column.name === 'tallied')) {
     await db.exec('ALTER TABLE at_stock_daily ADD COLUMN tallied INTEGER NOT NULL DEFAULT 0');
   }
+  if (!atStockColumns.some(column => column.name === 'opening_bags_input')) {
+    await db.exec('ALTER TABLE at_stock_daily ADD COLUMN opening_bags_input REAL');
+    await db.exec('ALTER TABLE at_stock_daily ADD COLUMN opening_pcs_input REAL');
+  }
   const billItemColumns = await db.all('PRAGMA table_info(bill_items)');
   if (!billItemColumns.some(column => column.name === 'return_type')) {
     await db.exec("ALTER TABLE bill_items ADD COLUMN return_type TEXT NOT NULL DEFAULT ''");
