@@ -1645,7 +1645,7 @@ const AT_EXTRA_PRODUCTS = [
 
 function canonicalAtProduct(product) {
   const name = String(product.itemName || '').toUpperCase();
-  if (/GRAM FLOUR|BESAN/.test(name) && getAtPackWeightKg(product.itemName) === 0.2) {
+  if (/GRAM FLOUR|BESAN/.test(name) && (getAtPackWeightKg(product.itemName) === 0.2 || product.itemName === 'GRAM FLOUR 200G')) {
     return { ...product, category: 'BC', itemCode: '', itemName: 'GRAM FLOUR 200G' };
   }
   if (product.category !== 'AT') return product;
@@ -1715,14 +1715,14 @@ async function getLockedAtProducts(db, companyId, date) {
 
 // Old per-variant rows for a merged 2 kg product are folded into the canonical row.
 async function clearAtVariantRows(db, companyId, date, product, clearOpening = true) {
-  if (product.itemName !== 'ATTA 2KG') return;
+  if (product.itemName !== 'ATTA 2KG' && product.itemName !== 'GRAM FLOUR 200G') return;
   const rows = await db.all(
     `SELECT item_code AS itemCode, item_name AS itemName FROM at_stock_daily
      WHERE company_id = ? AND stock_date = ? AND UPPER(TRIM(sales_category)) = 'AT'`,
     [companyId, date]
   );
   for (const row of rows) {
-    if (row.itemName === product.itemName && row.itemCode === product.itemCode) continue;
+    if (product.category === 'AT' && row.itemName === product.itemName && row.itemCode === product.itemCode) continue;
     if (atProductKey({ category: 'AT', ...row }) !== atProductKey(product)) continue;
     await db.run(
       `UPDATE at_stock_daily SET ${clearOpening ? 'opening_qty = NULL, ' : ''}purchase_qty = 0, damaged_qty = 0, tallied = 0
@@ -1743,10 +1743,10 @@ app.get('/api/profitability/at-stock', async (req, res) => {
 
   try {
     const products = await req.app.locals.db.all(
-      `SELECT DISTINCT CASE WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END AS category,
+      `SELECT DISTINCT CASE WHEN UPPER(item_name) LIKE '%GRAM FLOUR%' OR UPPER(item_name) LIKE '%BESAN%' THEN 'BC' WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END AS category,
               TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName
        FROM profitability_sales
-       WHERE company_id = ? AND CASE WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END IS NOT NULL
+       WHERE company_id = ? AND CASE WHEN UPPER(item_name) LIKE '%GRAM FLOUR%' OR UPPER(item_name) LIKE '%BESAN%' THEN 'BC' WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END IS NOT NULL
        UNION
        SELECT DISTINCT UPPER(TRIM(sales_category)) AS category,
               TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName
@@ -1755,13 +1755,13 @@ app.get('/api/profitability/at-stock', async (req, res) => {
       [req.user.companyId, req.user.companyId]
     );
     const salesRows = await req.app.locals.db.all(
-      `SELECT sales_date AS stockDate, CASE WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END AS category,
+      `SELECT sales_date AS stockDate, CASE WHEN UPPER(item_name) LIKE '%GRAM FLOUR%' OR UPPER(item_name) LIKE '%BESAN%' THEN 'BC' WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END AS category,
               TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName,
               SUM(quantity) AS salesQty, SUM(sales_return_qty) AS returnQty
        FROM profitability_sales
        WHERE company_id = ? AND sales_date <= ?
-         AND CASE WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END IS NOT NULL
-       GROUP BY sales_date, CASE WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END, TRIM(item_code), TRIM(item_name)`,
+         AND CASE WHEN UPPER(item_name) LIKE '%GRAM FLOUR%' OR UPPER(item_name) LIKE '%BESAN%' THEN 'BC' WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END IS NOT NULL
+       GROUP BY sales_date, CASE WHEN UPPER(item_name) LIKE '%GRAM FLOUR%' OR UPPER(item_name) LIKE '%BESAN%' THEN 'BC' WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END, TRIM(item_code), TRIM(item_name)`,
       [req.user.companyId, selectedDate]
     );
     const stockRows = await req.app.locals.db.all(
@@ -1789,7 +1789,18 @@ app.get('/api/profitability/at-stock', async (req, res) => {
       }
     }
     const stockByProduct = new Map();
-    for (const row of stockRows) {
+    for (const rawRow of stockRows) {
+      // Gram flour used to be stored as AT in kg; it is now a BC product counted in pieces.
+      const row = rawRow.category === 'AT' && canonicalAtProduct(rawRow).category === 'BC'
+        ? {
+            ...rawRow,
+            openingQty: rawRow.openingQty === null ? null : rawRow.openingQty / 0.2,
+            purchaseQty: rawRow.purchaseQty / 0.2,
+            damagedQty: rawRow.damagedQty / 0.2,
+            openingBags: null,
+            openingPcs: null
+          }
+        : rawRow;
       const key = getProductKey(row);
       if (!stockByProduct.has(key)) stockByProduct.set(key, new Map());
       const byDate = stockByProduct.get(key);
@@ -1917,10 +1928,10 @@ app.put('/api/profitability/at-stock/:date', async (req, res) => {
   try {
     const db = req.app.locals.db;
     const knownProducts = await db.all(
-      `SELECT DISTINCT CASE WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END AS category,
+      `SELECT DISTINCT CASE WHEN UPPER(item_name) LIKE '%GRAM FLOUR%' OR UPPER(item_name) LIKE '%BESAN%' THEN 'BC' WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END AS category,
               TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName
        FROM profitability_sales
-       WHERE company_id = ? AND CASE WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END IS NOT NULL
+       WHERE company_id = ? AND CASE WHEN UPPER(item_name) LIKE '%GRAM FLOUR%' OR UPPER(item_name) LIKE '%BESAN%' THEN 'BC' WHEN UPPER(sales_category) LIKE '%06 ATTA%' THEN 'AT' WHEN UPPER(sales_category) LIKE '%50 BREAKFAST CEREAL%' THEN 'BC' END IS NOT NULL
        UNION
        SELECT DISTINCT UPPER(TRIM(sales_category)) AS category,
               TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName
