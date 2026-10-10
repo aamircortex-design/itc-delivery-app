@@ -1898,7 +1898,7 @@ app.put('/api/profitability/at-stock/:date', async (req, res) => {
     const purchaseQty = entry.purchaseQty;
     const damagedQty = entry.damagedQty;
     if (
-      (canEditOpening && (typeof openingQty !== 'number' || !Number.isFinite(openingQty) || openingQty < 0 || openingQty > 1000000000)) ||
+      (canEditOpening && openingQty !== null && (typeof openingQty !== 'number' || !Number.isFinite(openingQty) || openingQty < 0 || openingQty > 1000000000)) ||
       (typeof purchaseQty !== 'number' || !Number.isFinite(purchaseQty) || purchaseQty < 0 || purchaseQty > 1000000000) ||
       (typeof damagedQty !== 'number' || !Number.isFinite(damagedQty) || damagedQty < 0 || damagedQty > 1000000000)
     ) {

@@ -701,14 +701,16 @@ async function saveAtStock() {
       ? (row.querySelector(`[data-stock-${field}-bags]`) ? readInput(`[data-stock-${field}-bags]`) * 30 : 0) +
         readInput(`[data-stock-${field}-pcs]`) * weight
       : readInput(`[data-stock-${field}-pcs]`);
-    const openingInput = category === 'AT' && currentUser.role === 'admin' && row.querySelector('[data-stock-opening-bags]')
+    const openingInputs = [...row.querySelectorAll('[data-stock-opening-bags], [data-stock-opening-pcs]')];
+    const openingChanged = openingInputs.some(input => input.value !== input.defaultValue);
+    const openingInput = category === 'AT' && currentUser.role === 'admin' && openingChanged && row.querySelector('[data-stock-opening-bags]')
       ? { bags: readInput('[data-stock-opening-bags]'), pcs: readInput('[data-stock-opening-pcs]') }
       : null;
     return {
       category,
       itemCode: row.dataset.stockCode,
       itemName: row.dataset.stockName,
-      openingQty: currentUser.role === 'admin' ? getQuantity('opening') : null,
+      openingQty: currentUser.role === 'admin' && openingChanged ? getQuantity('opening') : null,
       openingBags: openingInput?.bags,
       openingPcs: openingInput?.pcs,
       purchaseQty: getQuantity('purchase'),
