@@ -569,7 +569,7 @@ async function loadAtAssignmentReport() {
     document.querySelector('#at-assignment-agents').innerHTML = report.agents.map(agent => `
       <article class="at-assignment-agent">
         <h4>${escapeHtml(agent.agentName)}</h4>
-        <table class="at-stock-table">
+        <div class="at-stock-table-wrap"><table class="at-stock-table">
           <thead><tr><th>Category</th><th>Product</th><th>Quantity</th><th>Bills</th><th>Assigned</th></tr></thead>
           <tbody>${agent.items.map(item => `<tr>
             <td data-label="Category">${item.category}</td>
@@ -578,9 +578,9 @@ async function loadAtAssignmentReport() {
               ? formatAtStockQuantity(item.quantity * item.packWeightKg, item.packWeightKg)
               : `${formatStockNumber(item.quantity)} pcs`}</td>
             <td data-label="Bills">${item.billCount}</td>
-            <td data-label="Assigned"><button class="button at-stock-assigned${item.assigned ? ' is-assigned' : ''}" type="button" data-assignment-toggle="${item.assigned ? '1' : '0'}" data-agent-id="${agent.agentId ?? ''}" data-category="${item.category}" data-item-code="${escapeHtml(item.itemCode)}" data-item-name="${escapeHtml(item.itemName)}" aria-pressed="${item.assigned}" ${item.locked && currentUser?.role !== 'admin' ? 'disabled title="Assigned and tallied. Only an administrator can change this."' : ''}>${item.assigned ? 'Assigned ?' : 'Assigned'}</button></td>
+            <td data-label="Assigned"><button class="button at-stock-assigned${item.assigned ? ' is-assigned' : ''}" type="button" data-assignment-toggle="${item.assigned ? '1' : '0'}" data-agent-id="${agent.agentId ?? ''}" data-category="${item.category}" data-item-code="${escapeHtml(item.itemCode)}" data-item-name="${escapeHtml(item.itemName)}" aria-pressed="${item.assigned}" ${item.locked && currentUser?.role !== 'admin' ? 'disabled title="Assigned and tallied. Only an administrator can change this."' : ''}>${item.assigned ? 'Assigned \u2713' : 'Assigned'}</button></td>
           </tr>`).join('')}</tbody>
-        </table>
+        </table></div>
       </article>`).join('');
   } catch (error) {
     errorElement.textContent = error.message;
