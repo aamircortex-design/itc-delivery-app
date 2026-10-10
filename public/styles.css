@@ -392,6 +392,13 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
   .table-footer { gap: 7px; padding: 0 12px; }
   .footer-note { white-space: nowrap; }
   .page-footer { gap: 10px; font-size: 8px; }
+  .at-stock-table-wrap { -webkit-overflow-scrolling: touch; }
+  .at-stock-table { display: table; min-width: 760px; }
+  .at-stock-table thead { display: table-header-group; }
+  .at-stock-table tbody { display: table-row-group; }
+  .at-stock-table tbody tr { display: table-row; border: 0; border-radius: 0; }
+  .at-stock-table tbody td { display: table-cell; min-height: 0; padding: 8px 7px; border-top: 0; border-bottom: 1px solid #edf0ee; }
+  .at-stock-table tbody td::before { display: none; }
 }
 @media (max-width: 430px) {
   .page-heading { flex-direction: column; gap: 14px; }
