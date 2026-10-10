@@ -336,8 +336,6 @@ async function loadCurrentUser() {
   document.querySelector('#user-management-link').hidden = user.role !== 'admin';
   document.querySelector('#profitability-link').hidden = user.role === 'delivery_partner';
   document.querySelector('#at-stock-link').hidden = !['admin', 'manager'].includes(user.role);
-  document.querySelector('#at-assignment-link').hidden = !['admin', 'manager'].includes(user.role);
-  document.querySelector('#at-damages-link').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#open-upload').hidden = user.role === 'delivery_partner';
   document.querySelector('#download-template').hidden = user.role === 'delivery_partner';
   document.querySelector('#modal-template').hidden = user.role === 'delivery_partner';
@@ -412,6 +410,22 @@ function initializeAtStockInterface() {
     <p class="at-stock-note">AT quantities use 30 kg stock bags and loose packs; pack weight is read from the item name. BC quantities are in pieces. Sales and sales returns update from the uploaded sales register.</p>
     <p class="at-stock-save-status" id="at-stock-save-status" role="status"></p>`;
   const controls = document.querySelector('.profitability-controls');
+  const tabs = document.createElement('div');
+  tabs.className = 'profitability-tabs';
+  tabs.id = 'at-bc-tabs';
+  tabs.setAttribute('role', 'tablist');
+  tabs.setAttribute('aria-label', 'AT and BC sections');
+  tabs.hidden = true;
+  tabs.innerHTML = '<button class="profitability-tab" type="button" role="tab" data-at-tab="at-stock">Stock</button><button class="profitability-tab" type="button" role="tab" data-at-tab="at-assignment">Assignment</button><button class="profitability-tab" type="button" role="tab" data-at-tab="at-damages">Damages</button>';
+  tabs.addEventListener('click', event => {
+    const tab = event.target.closest('[data-at-tab]');
+    if (!tab) return;
+    showDashboardPage(tab.dataset.atTab);
+    if (tab.dataset.atTab === 'at-stock') loadAtStockReport();
+    else if (tab.dataset.atTab === 'at-assignment') loadAtAssignmentReport();
+    else loadAtDamages();
+  });
+  controls.insertAdjacentElement('beforebegin', tabs);
   controls.insertAdjacentElement('afterend', panel);
   document.querySelector('#save-at-stock').addEventListener('click', saveAtStock);
   document.querySelector('#at-stock-rows').addEventListener('click', toggleAtAssigned);
@@ -876,7 +890,14 @@ function showDashboardPage(page) {
   document.querySelector('#profitability-at-assignment-report').hidden = !isAtAssignment;
   document.querySelector('#profitability-at-damages-report').hidden = !isAtDamages;
   document.querySelector('.profitability-controls').hidden = isAtDamages;
-  document.querySelector('.profitability-tabs').hidden = isAtArea || isManagerUpload;
+  const atTabs = document.querySelector('#at-bc-tabs');
+  atTabs.hidden = !isAtArea;
+  atTabs.querySelectorAll('[data-at-tab]').forEach(tab => {
+    const active = tab.dataset.atTab === page;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', String(active));
+  });
+  document.querySelector('.profitability-tabs:not(#at-bc-tabs)').hidden = isAtArea || isManagerUpload;
   document.querySelector('#profitability-sku-report').hidden = isAtArea;
   document.querySelector('#profitability-sku-report > .profitability-panel').hidden = isManagerUpload;
   document.querySelector('#profitability-sku-report > .page-footer').hidden = isManagerUpload;
@@ -885,7 +906,7 @@ function showDashboardPage(page) {
   document.querySelector('.day-picker').hidden = isProfitabilityArea;
   exportButton.hidden = isProfitabilityArea || currentUser?.role === 'delivery_partner';
   document.querySelector('.breadcrumbs strong').textContent =
-    isAtDamages ? 'AT Damages' : isAtAssignment ? 'AT Assignment' : isAtStock ? 'AT Stock' : isProfitability ? 'Profitability' : 'Deliveries';
+    isAtArea ? 'AT & BC' : isProfitability ? 'Profitability' : 'Deliveries';
   const profitabilityHeading = document.querySelector('#profitability .page-heading h1');
   profitabilityHeading.innerHTML = isManagerUpload ? 'Sales register <span>upload.</span>' : isAtDamages ? 'AT Damages <span>register.</span>' : isAtAssignment ? 'AT Assignment <span>by agent.</span>' : isAtStock ? 'AT Stock <span>management.</span>' : 'Profitability <span>reports.</span>';
   document.querySelector('#profitability .page-heading .eyebrow').innerHTML = isAtArea
@@ -906,12 +927,8 @@ function showDashboardPage(page) {
   document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
     const isActive = link.id === 'profitability-link'
       ? isProfitability
-      : link.id === 'at-damages-link'
-        ? isAtDamages
-      : link.id === 'at-assignment-link'
-        ? isAtAssignment
       : link.id === 'at-stock-link'
-        ? isAtStock
+        ? isAtArea
         : link.id === 'deliveries-link'
           ? !isProfitabilityArea
           : false;
@@ -1697,9 +1714,7 @@ document.querySelector('#dashboard-date').addEventListener('change', event => {
 document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
   link.addEventListener('click', event => {
     event.preventDefault();
-    let page = link.id === 'at-damages-link' ? 'at-damages'
-      : link.id === 'at-assignment-link' ? 'at-assignment'
-      : link.id === 'at-stock-link' ? 'at-stock'
+    let page = link.id === 'at-stock-link' ? 'at-stock'
       : link.id === 'profitability-link' ? 'profitability' : 'deliveries';
     if (page === 'profitability' && !['admin', 'manager'].includes(currentUser?.role)) return;
     if (['at-stock', 'at-assignment', 'at-damages'].includes(page) && !['admin', 'manager'].includes(currentUser?.role)) return;
