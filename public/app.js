@@ -398,12 +398,12 @@ function initializeAtStockInterface() {
   panel.innerHTML = `
     <div class="at-stock-heading">
       <div><h3>AT stock</h3><p id="at-stock-date-label"></p></div>
-      <button class="button button-primary" id="save-at-stock" type="button">Save stock changes</button>
+      <div class="at-stock-actions"><button class="button button-secondary" id="export-at-stock" type="button">Export Excel</button><button class="button button-primary" id="save-at-stock" type="button">Save stock changes</button></div>
     </div>
     <div class="dialog-error" id="at-stock-error" role="alert" hidden></div>
     <div class="at-stock-table-wrap">
       <table class="at-stock-table">
-        <thead><tr><th>Category</th><th>Product</th><th>Opening</th><th>Sales</th><th>Sales return</th><th>Purchase</th><th>Closing</th><th>Assigned</th></tr></thead>
+        <thead><tr><th>Category</th><th>Product</th><th>Opening</th><th>Sales</th><th>Sales return</th><th>Purchase</th><th>Damaged</th><th>Closing</th><th>Assigned</th></tr></thead>
         <tbody id="at-stock-rows"></tbody>
       </table>
     </div>
@@ -414,6 +414,13 @@ function initializeAtStockInterface() {
   controls.insertAdjacentElement('afterend', panel);
   document.querySelector('#save-at-stock').addEventListener('click', saveAtStock);
   document.querySelector('#at-stock-rows').addEventListener('click', toggleAtAssigned);
+  for (const [id, path, name] of [['#export-at-stock', 'at-stock', 'AT-Stock'], ['#export-at-assignment', 'at-assignment', 'AT-Assignment']]) {
+    document.querySelector(id).addEventListener('click', () => {
+      const date = document.querySelector('#profit-date').value;
+      if (!date) return showToast('Choose a date before exporting.', true);
+      downloadExcelReport(`/api/profitability/${path}?date=${encodeURIComponent(date)}&format=xlsx`, `${name}-${date}.xlsx`, document.querySelector(id));
+    });
+  }
 
   const assignment = document.createElement('section');
   assignment.className = 'profitability-panel at-assignment-report';
@@ -422,6 +429,7 @@ function initializeAtStockInterface() {
   assignment.innerHTML = `
     <div class="at-stock-heading">
       <div><h3>AT and BC assignment by delivery agent</h3><p id="at-assignment-date-label"></p></div>
+      <button class="button button-secondary" id="export-at-assignment" type="button">Export Excel</button>
     </div>
     <div class="dialog-error" id="at-assignment-error" role="alert" hidden></div>
     <div id="at-assignment-agents"></div>
@@ -550,6 +558,7 @@ function renderAtStockReport(report) {
     <td data-label="Sales">${row.category === 'AT' ? formatAtStockQuantity(row.salesQty, row.packWeightKg) : `${formatStockNumber(row.salesQty)} pcs`}</td>
     <td data-label="Sales return">${row.category === 'AT' ? formatAtStockQuantity(row.returnQty, row.packWeightKg) : `${formatStockNumber(row.returnQty)} pcs`}</td>
     <td data-label="Purchase">${renderStockEntryInputs(row, 'purchase', row.purchaseQty, canEditPurchases)}</td>
+    <td data-label="Damaged">${renderStockEntryInputs(row, 'damaged', row.damagedQty, canEditPurchases)}</td>
     <td data-label="Closing">${row.category === 'AT' ? formatAtStockQuantity(row.closingQty, row.packWeightKg) : `${formatStockNumber(row.closingQty)} pcs`}</td>
     <td data-label="Assigned"><button class="button at-stock-assigned${row.assigned ? ' is-assigned' : ''}" type="button" data-stock-assigned="${row.assigned ? '1' : '0'}" aria-pressed="${row.assigned}">${row.assigned ? 'Assigned ✓' : 'Assigned'}</button></td>
   </tr>`).join('');
@@ -603,7 +612,8 @@ async function saveAtStock() {
       itemCode: row.dataset.stockCode,
       itemName: row.dataset.stockName,
       openingQty: currentUser.role === 'admin' ? getQuantity('opening') : null,
-      purchaseQty: getQuantity('purchase')
+      purchaseQty: getQuantity('purchase'),
+      damagedQty: getQuantity('damaged')
     };
   });
   if (!entries.length) {

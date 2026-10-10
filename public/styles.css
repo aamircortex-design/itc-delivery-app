@@ -445,3 +445,4 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .at-stock-assigned.is-assigned { background: #3f7a56; border-color: #3f7a56; color: #fff; }
 .at-assignment-agent { margin-top: 20px; }
 .at-assignment-agent h4 { margin: 0 0 8px; font-size: 1rem; }
+.at-stock-actions { display: flex; gap: 8px; flex-wrap: wrap; }
