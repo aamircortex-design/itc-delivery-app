@@ -102,6 +102,16 @@ async function initDb() {
       UNIQUE (company_id, item_code, item_name)
     );
 
+    CREATE TABLE IF NOT EXISTS at_assignment_status (
+      company_id INTEGER NOT NULL,
+      assign_date TEXT NOT NULL,
+      agent_key INTEGER NOT NULL DEFAULT 0,
+      sales_category TEXT NOT NULL CHECK (sales_category IN ('AT', 'BC')),
+      item_code TEXT NOT NULL DEFAULT '',
+      item_name TEXT NOT NULL,
+      assigned INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (company_id, assign_date, agent_key, sales_category, item_code, item_name)
+    );
     CREATE INDEX IF NOT EXISTS profitability_sales_period
       ON profitability_sales(company_id, sales_date);
     CREATE UNIQUE INDEX IF NOT EXISTS profitability_product_costs_by_code
@@ -261,6 +271,9 @@ async function initDb() {
   }
   if (!atStockColumns.some(column => column.name === 'damaged_qty')) {
     await db.exec('ALTER TABLE at_stock_daily ADD COLUMN damaged_qty REAL NOT NULL DEFAULT 0');
+  }
+  if (!atStockColumns.some(column => column.name === 'tallied')) {
+    await db.exec('ALTER TABLE at_stock_daily ADD COLUMN tallied INTEGER NOT NULL DEFAULT 0');
   }
   const billItemColumns = await db.all('PRAGMA table_info(bill_items)');
   if (!billItemColumns.some(column => column.name === 'return_type')) {

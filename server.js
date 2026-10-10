@@ -1633,6 +1633,59 @@ app.post('/api/profitability/product-costs', upload.single('file'), async (req, 
   }
 });
 
+const atProductKey = row =>
+  `${row.category}\u0000${String(row.itemCode || '').trim().toLowerCase()}\u0000${String(row.itemName || '').trim().toLowerCase()}`;
+
+async function loadAtAssignmentRows(db, companyId, date) {
+  return db.all(
+    `SELECT agentId, agentName, category, itemCode, itemName, SUM(quantity) AS quantity,
+            COUNT(DISTINCT billNo) AS billCount, MAX(assigned) AS assigned
+     FROM (
+       SELECT bills.assigned_to AS agentId, COALESCE(users.full_name, 'Unassigned') AS agentName,
+              CASE WHEN UPPER(ps.sales_category) LIKE '%06 ATTA%' THEN 'AT' ELSE 'BC' END AS category,
+              TRIM(ps.item_code) AS itemCode, TRIM(ps.item_name) AS itemName,
+              ps.quantity AS quantity, ps.bill_no AS billNo,
+              COALESCE((SELECT s.assigned FROM at_assignment_status s
+                        WHERE s.company_id = ps.company_id AND s.assign_date = ps.sales_date
+                          AND s.agent_key = COALESCE(bills.assigned_to, 0)
+                          AND s.sales_category = CASE WHEN UPPER(ps.sales_category) LIKE '%06 ATTA%' THEN 'AT' ELSE 'BC' END
+                          AND s.item_code = TRIM(ps.item_code) AND s.item_name = TRIM(ps.item_name)), 0) AS assigned
+       FROM profitability_sales ps
+       LEFT JOIN bills ON bills.company_id = ps.company_id AND bills.bill_no = ps.bill_no
+       LEFT JOIN users ON users.id = bills.assigned_to
+       WHERE ps.company_id = ? AND ps.sales_date = ? AND (UPPER(ps.sales_category) LIKE '%06 ATTA%' OR UPPER(ps.sales_category) LIKE '%50 BREAKFAST CEREAL%')
+     )
+     GROUP BY agentId, category, itemCode, itemName
+     HAVING SUM(quantity) <> 0`,
+    [companyId, date]
+  );
+}
+
+// An item is locked for managers once its stock is tallied and every agent's assignment is confirmed.
+async function getLockedAtProducts(db, companyId, date) {
+  const tallied = await db.all(
+    `SELECT UPPER(TRIM(sales_category)) AS category, TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName
+     FROM at_stock_daily WHERE company_id = ? AND stock_date = ? AND tallied = 1`,
+    [companyId, date]
+  );
+  const assignmentRows = await loadAtAssignmentRows(db, companyId, date);
+  const state = new Map();
+  for (const row of assignmentRows) {
+    const key = atProductKey(row);
+    const current = state.get(key) || { count: 0, assigned: 0 };
+    current.count += 1;
+    current.assigned += row.assigned ? 1 : 0;
+    state.set(key, current);
+  }
+  const locked = new Set();
+  for (const row of tallied) {
+    const key = atProductKey(row);
+    const current = state.get(key);
+    if (current && current.count === current.assigned) locked.add(key);
+  }
+  return locked;
+}
+
 app.get('/api/profitability/at-stock', async (req, res) => {
   if (!['admin', 'manager'].includes(req.user.role)) {
     return res.status(403).json({ error: 'Administrator or manager access is required for AT stock.' });
@@ -1668,7 +1721,7 @@ app.get('/api/profitability/at-stock', async (req, res) => {
     const stockRows = await req.app.locals.db.all(
       `SELECT stock_date AS stockDate, UPPER(TRIM(sales_category)) AS category,
               TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName,
-              opening_qty AS openingQty, purchase_qty AS purchaseQty, damaged_qty AS damagedQty, assigned
+              opening_qty AS openingQty, purchase_qty AS purchaseQty, damaged_qty AS damagedQty, tallied
        FROM at_stock_daily
        WHERE company_id = ? AND stock_date <= ?`,
       [req.user.companyId, selectedDate]
@@ -1689,6 +1742,7 @@ app.get('/api/profitability/at-stock', async (req, res) => {
       stockByProduct.get(key).set(row.stockDate, row);
     }
 
+    const lockedProducts = await getLockedAtProducts(req.app.locals.db, req.user.companyId, selectedDate);
     const rows = products.map(product => {
       const key = getProductKey(product);
       const sales = salesByProduct.get(key) || new Map();
@@ -1712,13 +1766,14 @@ app.get('/api/profitability/at-stock', async (req, res) => {
         const damagedQty = Number(stockEntry?.damagedQty || 0);
         onHand = opening + purchaseQty + returnQty - salesQty - damagedQty;
         if (date === selectedDate) {
-          selectedDay = { openingQty: opening, purchaseQty, damagedQty, salesQty, returnQty, closingQty: onHand, assigned: Boolean(stockEntry?.assigned) };
+          selectedDay = { openingQty: opening, purchaseQty, damagedQty, salesQty, returnQty, closingQty: onHand, tallied: Boolean(stockEntry?.tallied) };
         }
       }
       const packWeightKg = product.category === 'AT' ? getAtPackWeightKg(product.itemName) : null;
       return {
         ...product,
         ...selectedDay,
+        locked: lockedProducts.has(atProductKey(product)),
         packWeightKg,
         displayName: product.category === 'AT' ? getAtDisplayName(product.itemName, packWeightKg) : product.itemName
       };
@@ -1728,13 +1783,13 @@ app.get('/api/profitability/at-stock', async (req, res) => {
       return sendXlsx(res, createWorkbook([{
         name: 'AT Stock',
         rows: [
-          ['Category', 'Product', 'Opening', 'Sales', 'Sales return', 'Purchase', 'Damaged', 'Closing', 'Assigned'],
+          ['Category', 'Product', 'Opening', 'Sales', 'Sales return', 'Purchase', 'Damaged', 'Closing', 'Tallied'],
           ...rows.map(row => [
             row.category, row.displayName,
             formatAtQuantity(row, row.openingQty), formatAtQuantity(row, row.salesQty),
             formatAtQuantity(row, row.returnQty), formatAtQuantity(row, row.purchaseQty),
             formatAtQuantity(row, row.damagedQty), formatAtQuantity(row, row.closingQty),
-            row.assigned ? 'Yes' : 'No'
+            row.tallied ? 'Yes' : 'No'
           ])
         ],
         autoFilterRow: 1
@@ -1795,7 +1850,9 @@ app.put('/api/profitability/at-stock/:date', async (req, res) => {
     const productKey = product =>
       `${product.category}\u0000${String(product.itemCode || '').toLowerCase()}\u0000${String(product.itemName || '').toLowerCase()}`;
     const knownProductKeys = new Set(knownProducts.map(productKey));
+    const lockedProducts = req.user.role === 'admin' ? new Set() : await getLockedAtProducts(db, req.user.companyId, selectedDate);
     for (const entry of entries) {
+      if (lockedProducts.has(atProductKey(entry))) continue;
       if (!knownProductKeys.has(productKey(entry))) {
         return res.status(400).json({ error: 'An AT stock product is not in the uploaded sales data.' });
       }
@@ -1829,7 +1886,7 @@ app.put('/api/profitability/at-stock/:date', async (req, res) => {
   }
 });
 
-app.patch('/api/profitability/at-stock/:date/assigned', async (req, res) => {
+app.patch('/api/profitability/at-stock/:date/tallied', async (req, res) => {
   if (!['admin', 'manager'].includes(req.user.role)) {
     return res.status(403).json({ error: 'Administrator or manager access is required for AT stock.' });
   }
@@ -1837,8 +1894,8 @@ app.patch('/api/profitability/at-stock/:date/assigned', async (req, res) => {
   const category = String(req.body?.category || '').trim().toUpperCase();
   const itemCode = String(req.body?.itemCode || '').trim();
   const itemName = String(req.body?.itemName || '').trim();
-  if (!selectedDate || !['AT', 'BC'].includes(category) || !itemName || itemName.length > 300 || itemCode.length > 100 || typeof req.body?.assigned !== 'boolean') {
-    return res.status(400).json({ error: 'Provide a valid product and assigned status.' });
+  if (!selectedDate || !['AT', 'BC'].includes(category) || !itemName || itemName.length > 300 || itemCode.length > 100 || typeof req.body?.tallied !== 'boolean') {
+    return res.status(400).json({ error: 'Provide a valid product and tallied status.' });
   }
   try {
     const db = req.app.locals.db;
@@ -1848,17 +1905,61 @@ app.patch('/api/profitability/at-stock/:date/assigned', async (req, res) => {
       [req.user.companyId, itemName, itemCode]
     );
     if (!known) return res.status(400).json({ error: 'This product is not in the uploaded sales data.' });
+    if (req.user.role !== 'admin') {
+      const locked = await getLockedAtProducts(db, req.user.companyId, selectedDate);
+      if (locked.has(atProductKey({ category, itemCode, itemName }))) {
+        return res.status(403).json({ error: 'This item is assigned and tallied. Only an administrator can change it.' });
+      }
+    }
     await db.run(
-      `INSERT INTO at_stock_daily (company_id, stock_date, sales_category, item_code, item_name, assigned)
+      `INSERT INTO at_stock_daily (company_id, stock_date, sales_category, item_code, item_name, tallied)
        VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(company_id, stock_date, sales_category, item_code, item_name)
+       DO UPDATE SET tallied = excluded.tallied`,
+      [req.user.companyId, selectedDate, category, itemCode, itemName, req.body.tallied ? 1 : 0]
+    );
+    res.json({ tallied: req.body.tallied });
+  } catch (error) {
+    console.error('AT tallied update failed:', error);
+    res.status(500).json({ error: 'Unable to update the tallied status.' });
+  }
+});
+
+app.patch('/api/profitability/at-assignment/:date/assigned', async (req, res) => {
+  if (!['admin', 'manager'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Administrator or manager access is required for AT assignment.' });
+  }
+  const selectedDate = normalizeDeliveryDate(req.params.date);
+  const category = String(req.body?.category || '').trim().toUpperCase();
+  const itemCode = String(req.body?.itemCode || '').trim();
+  const itemName = String(req.body?.itemName || '').trim();
+  const agentKey = req.body?.agentId === null || req.body?.agentId === undefined ? 0 : Number(req.body.agentId);
+  if (!selectedDate || !['AT', 'BC'].includes(category) || !itemName || itemName.length > 300 || itemCode.length > 100 ||
+      !Number.isInteger(agentKey) || agentKey < 0 || typeof req.body?.assigned !== 'boolean') {
+    return res.status(400).json({ error: 'Provide a valid assignment and status.' });
+  }
+  try {
+    const db = req.app.locals.db;
+    const rows = await loadAtAssignmentRows(db, req.user.companyId, selectedDate);
+    const exists = rows.some(row => (row.agentId || 0) === agentKey && atProductKey(row) === atProductKey({ category, itemCode, itemName }));
+    if (!exists) return res.status(400).json({ error: 'This assignment is not in the sales data for this date.' });
+    if (req.user.role !== 'admin') {
+      const locked = await getLockedAtProducts(db, req.user.companyId, selectedDate);
+      if (locked.has(atProductKey({ category, itemCode, itemName }))) {
+        return res.status(403).json({ error: 'This item is assigned and tallied. Only an administrator can change it.' });
+      }
+    }
+    await db.run(
+      `INSERT INTO at_assignment_status (company_id, assign_date, agent_key, sales_category, item_code, item_name, assigned)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(company_id, assign_date, agent_key, sales_category, item_code, item_name)
        DO UPDATE SET assigned = excluded.assigned`,
-      [req.user.companyId, selectedDate, category, itemCode, itemName, req.body.assigned ? 1 : 0]
+      [req.user.companyId, selectedDate, agentKey, category, itemCode, itemName, req.body.assigned ? 1 : 0]
     );
     res.json({ assigned: req.body.assigned });
   } catch (error) {
-    console.error('AT assigned update failed:', error);
-    res.status(500).json({ error: 'Unable to update the assigned status.' });
+    console.error('AT assignment update failed:', error);
+    res.status(500).json({ error: 'Unable to update the assignment status.' });
   }
 });
 
@@ -1869,19 +1970,8 @@ app.get('/api/profitability/at-assignment', async (req, res) => {
   const selectedDate = normalizeDeliveryDate(req.query.date);
   if (!selectedDate) return res.status(400).json({ error: 'Choose a valid assignment date.' });
   try {
-    const rows = await req.app.locals.db.all(
-      `SELECT bills.assigned_to AS agentId, COALESCE(users.full_name, 'Unassigned') AS agentName,
-              TRIM(ps.item_code) AS itemCode, TRIM(ps.item_name) AS itemName,
-              CASE WHEN UPPER(ps.sales_category) LIKE '%06 ATTA%' THEN 'AT' ELSE 'BC' END AS category,
-              SUM(ps.quantity) AS quantity, COUNT(DISTINCT ps.bill_no) AS billCount
-       FROM profitability_sales ps
-       LEFT JOIN bills ON bills.company_id = ps.company_id AND bills.bill_no = ps.bill_no
-       LEFT JOIN users ON users.id = bills.assigned_to
-       WHERE ps.company_id = ? AND ps.sales_date = ? AND (UPPER(ps.sales_category) LIKE '%06 ATTA%' OR UPPER(ps.sales_category) LIKE '%50 BREAKFAST CEREAL%')
-       GROUP BY bills.assigned_to, TRIM(ps.item_code), TRIM(ps.item_name), 3
-       HAVING SUM(ps.quantity) <> 0`,
-      [req.user.companyId, selectedDate]
-    );
+    const rows = await loadAtAssignmentRows(req.app.locals.db, req.user.companyId, selectedDate);
+    const lockedProducts = await getLockedAtProducts(req.app.locals.db, req.user.companyId, selectedDate);
     const agents = new Map();
     for (const row of rows) {
       const key = row.agentId ?? 'none';
@@ -1889,11 +1979,14 @@ app.get('/api/profitability/at-assignment', async (req, res) => {
       const packWeightKg = row.category === 'AT' ? getAtPackWeightKg(row.itemName) : null;
       agents.get(key).items.push({
         category: row.category,
+        itemCode: row.itemCode,
         itemName: row.itemName,
         displayName: row.category === 'AT' ? getAtDisplayName(row.itemName, packWeightKg) : row.itemName,
         packWeightKg,
         quantity: Number(row.quantity),
-        billCount: row.billCount
+        billCount: row.billCount,
+        assigned: Boolean(row.assigned),
+        locked: lockedProducts.has(atProductKey(row))
       });
     }
     const result = [...agents.values()]

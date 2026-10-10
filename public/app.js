@@ -402,7 +402,7 @@ function initializeAtStockInterface() {
     <div class="dialog-error" id="at-stock-error" role="alert" hidden></div>
     <div class="at-stock-table-wrap">
       <table class="at-stock-table">
-        <thead><tr><th>Category</th><th>Product</th><th>Opening</th><th>Sales</th><th>Sales return</th><th>Purchase</th><th>Damaged</th><th>Closing</th><th>Assigned</th></tr></thead>
+        <thead><tr><th>Category</th><th>Product</th><th>Opening</th><th>Sales</th><th>Sales return</th><th>Purchase</th><th>Damaged</th><th>Closing</th><th>Tallied</th></tr></thead>
         <tbody id="at-stock-rows"></tbody>
       </table>
     </div>
@@ -428,7 +428,8 @@ function initializeAtStockInterface() {
   controls.insertAdjacentElement('beforebegin', tabs);
   controls.insertAdjacentElement('afterend', panel);
   document.querySelector('#save-at-stock').addEventListener('click', saveAtStock);
-  document.querySelector('#at-stock-rows').addEventListener('click', toggleAtAssigned);
+  document.querySelector('#at-stock-rows').addEventListener('click', toggleAtTallied);
+  panel.addEventListener('click', event => { if (event.target.closest('[data-assignment-toggle]')) toggleAtAssignment(event); });
 
   const assignment = document.createElement('section');
   assignment.className = 'profitability-panel at-assignment-report';
@@ -507,34 +508,54 @@ async function loadAtDamages() {
   }
 }
 
-async function toggleAtAssigned(event) {
-  const button = event.target.closest('[data-stock-assigned]');
+async function toggleAtTallied(event) {
+  const button = event.target.closest('[data-stock-tallied]');
   if (!button) return;
   const row = button.closest('tr');
-  const assigned = button.dataset.stockAssigned !== '1';
+  const tallied = button.dataset.stockTallied !== '1';
   button.disabled = true;
   try {
     const date = document.querySelector('#profit-date').value;
-    await requestJson(`/api/profitability/at-stock/${encodeURIComponent(date)}/assigned`, {
+    await requestJson(`/api/profitability/at-stock/${encodeURIComponent(date)}    /tallied`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         category: row.dataset.stockCategory,
         itemCode: row.dataset.stockCode,
         itemName: row.dataset.stockName,
-        assigned
+            tallied
       })
     });
-    button.dataset.stockAssigned = assigned ? '1' : '0';
-    button.classList.toggle('is-assigned', assigned);
-    button.setAttribute('aria-pressed', String(assigned));
-    button.textContent = assigned ? 'Assigned ✓' : 'Assigned';
-  } catch (error) {
-    showToast(error.message);
-  } finally {
-    button.disabled = false;
-  }
-}
+        await loadAtStockReport();
+      } catch (error) {
+        showToast(error.message);
+        button.disabled = false;
+      }
+    }
+
+    async function toggleAtAssignment(event) {
+      const button = event.target.closest('[data-assignment-toggle]');
+      const assigned = button.dataset.assignmentToggle !== '1';
+      button.disabled = true;
+      try {
+        const date = document.querySelector('#profit-date').value;
+        await requestJson(`/api/profitability/at-assignment/${encodeURIComponent(date)}/assigned`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agentId: button.dataset.agentId ? Number(button.dataset.agentId) : null,
+            category: button.dataset.category,
+            itemCode: button.dataset.itemCode,
+            itemName: button.dataset.itemName,
+            assigned
+          })
+        });
+        await loadAtAssignmentReport();
+      } catch (error) {
+        showToast(error.message);
+        button.disabled = false;
+      }
+    }
 
 async function loadAtAssignmentReport() {
   const selectedDate = document.querySelector('#profit-date').value;
@@ -549,7 +570,7 @@ async function loadAtAssignmentReport() {
       <article class="at-assignment-agent">
         <h4>${escapeHtml(agent.agentName)}</h4>
         <table class="at-stock-table">
-          <thead><tr><th>Category</th><th>Product</th><th>Quantity</th><th>Bills</th></tr></thead>
+          <thead><tr><th>Category</th><th>Product</th><th>Quantity</th><th>Bills</th><th>Assigned</th></tr></thead>
           <tbody>${agent.items.map(item => `<tr>
             <td data-label="Category">${item.category}</td>
             <td data-label="Product" title="${escapeHtml(item.itemName)}">${escapeHtml(item.displayName)}</td>
@@ -557,6 +578,7 @@ async function loadAtAssignmentReport() {
               ? formatAtStockQuantity(item.quantity * item.packWeightKg, item.packWeightKg)
               : `${formatStockNumber(item.quantity)} pcs`}</td>
             <td data-label="Bills">${item.billCount}</td>
+            <td data-label="Assigned"><button class="button at-stock-assigned${item.assigned ? ' is-assigned' : ''}" type="button" data-assignment-toggle="${item.assigned ? '1' : '0'}" data-agent-id="${agent.agentId ?? ''}" data-category="${item.category}" data-item-code="${escapeHtml(item.itemCode)}" data-item-name="${escapeHtml(item.itemName)}" aria-pressed="${item.assigned}" ${item.locked && currentUser?.role !== 'admin' ? 'disabled title="Assigned and tallied. Only an administrator can change this."' : ''}>${item.assigned ? 'Assigned ?' : 'Assigned'}</button></td>
           </tr>`).join('')}</tbody>
         </table>
       </article>`).join('');
@@ -618,7 +640,10 @@ function renderAtStockReport(report) {
   const missingPackNames = report.rows
     .filter(row => row.category === 'AT' && !row.packWeightKg)
     .map(row => row.itemName);
-  const rows = report.rows.map(row => `<tr data-stock-category="${escapeHtml(row.category)}"
+  const rows = report.rows.map(row => {
+  const canEditRow = canEditPurchases && (!row.locked || currentUser?.role === 'admin');
+  const lockedForUser = row.locked && currentUser?.role !== 'admin';
+  return `<tr data-stock-category="${escapeHtml(row.category)}"
     data-stock-code="${escapeHtml(row.itemCode)}" data-stock-name="${escapeHtml(row.itemName)}"
     data-stock-pack-weight="${row.packWeightKg || ''}">
     <td data-label="Category">${escapeHtml(row.category)}</td>
@@ -626,11 +651,11 @@ function renderAtStockReport(report) {
     <td data-label="Opening">${renderStockEntryInputs(row, 'opening', row.openingQty, canEditOpening)}</td>
     <td data-label="Sales">${row.category === 'AT' ? formatAtStockQuantity(row.salesQty, row.packWeightKg) : `${formatStockNumber(row.salesQty)} pcs`}</td>
     <td data-label="Sales return">${row.category === 'AT' ? formatAtStockQuantity(row.returnQty, row.packWeightKg) : `${formatStockNumber(row.returnQty)} pcs`}</td>
-    <td data-label="Purchase">${renderStockEntryInputs(row, 'purchase', row.purchaseQty, canEditPurchases)}</td>
-    <td data-label="Damaged">${renderStockEntryInputs(row, 'damaged', row.damagedQty, canEditPurchases)}</td>
+    <td data-label="Purchase">${renderStockEntryInputs(row, 'purchase', row.purchaseQty, canEditRow)}</td>
+    <td data-label="Damaged">${renderStockEntryInputs(row, 'damaged', row.damagedQty, canEditRow)}</td>
     <td data-label="Closing">${row.category === 'AT' ? formatAtStockQuantity(row.closingQty, row.packWeightKg) : `${formatStockNumber(row.closingQty)} pcs`}</td>
-    <td data-label="Assigned"><button class="button at-stock-assigned${row.assigned ? ' is-assigned' : ''}" type="button" data-stock-assigned="${row.assigned ? '1' : '0'}" aria-pressed="${row.assigned}">${row.assigned ? 'Assigned ✓' : 'Assigned'}</button></td>
-  </tr>`).join('');
+    <td data-label="Tallied"><button class="button at-stock-assigned${row.tallied ? ' is-assigned' : ''}" type="button" data-stock-tallied="${row.tallied ? '1' : '0'}" aria-pressed="${row.tallied}" ${lockedForUser ? 'disabled title="Assigned and tallied. Only an administrator can change this."' : ''}>${row.tallied ? 'Tallied ✓' : 'Tallied'}</button></td>
+  </tr>`;}).join('');
   document.querySelector('#at-stock-rows').innerHTML = rows;
   document.querySelector('#at-stock-empty').hidden = report.rows.length > 0;
   document.querySelector('#at-stock-date-label').textContent = `Stock for ${formatDate(report.date)}`;
