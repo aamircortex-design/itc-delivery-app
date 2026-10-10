@@ -337,6 +337,7 @@ async function loadCurrentUser() {
   document.querySelector('#profitability-link').hidden = user.role === 'delivery_partner';
   document.querySelector('#at-stock-link').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#at-assignment-link').hidden = !['admin', 'manager'].includes(user.role);
+  document.querySelector('#at-damages-link').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#open-upload').hidden = user.role === 'delivery_partner';
   document.querySelector('#download-template').hidden = user.role === 'delivery_partner';
   document.querySelector('#modal-template').hidden = user.role === 'delivery_partner';
@@ -414,13 +415,6 @@ function initializeAtStockInterface() {
   controls.insertAdjacentElement('afterend', panel);
   document.querySelector('#save-at-stock').addEventListener('click', saveAtStock);
   document.querySelector('#at-stock-rows').addEventListener('click', toggleAtAssigned);
-  for (const [id, path, name] of [['#export-at-stock', 'at-stock', 'AT-Stock'], ['#export-at-assignment', 'at-assignment', 'AT-Assignment']]) {
-    document.querySelector(id).addEventListener('click', () => {
-      const date = document.querySelector('#profit-date').value;
-      if (!date) return showToast('Choose a date before exporting.', true);
-      downloadExcelReport(`/api/profitability/${path}?date=${encodeURIComponent(date)}&format=xlsx`, `${name}-${date}.xlsx`, document.querySelector(id));
-    });
-  }
 
   const assignment = document.createElement('section');
   assignment.className = 'profitability-panel at-assignment-report';
@@ -436,6 +430,67 @@ function initializeAtStockInterface() {
     <p class="at-stock-empty" id="at-assignment-empty" hidden>No AT or BC sales are available for this date.</p>
     <p class="at-stock-note">Quantities come from the uploaded sales register and follow the delivery assignments made under Deliveries. Bags are 30 kg each.</p>`;
   panel.insertAdjacentElement('afterend', assignment);
+
+  for (const [id, path, name] of [['#export-at-stock', 'at-stock', 'AT-Stock'], ['#export-at-assignment', 'at-assignment', 'AT-Assignment']]) {
+    document.querySelector(id).addEventListener('click', () => {
+      const date = document.querySelector('#profit-date').value;
+      if (!date) return showToast('Choose a date before exporting.', true);
+      downloadExcelReport(`/api/profitability/${path}?date=${encodeURIComponent(date)}&format=xlsx`, `${name}-${date}.xlsx`, document.querySelector(id));
+    });
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const damages = document.createElement('section');
+  damages.className = 'profitability-panel at-damages-report';
+  damages.id = 'profitability-at-damages-report';
+  damages.hidden = true;
+  damages.innerHTML = `
+    <div class="at-stock-heading">
+      <div><h3>AT and BC damaged stock</h3><p>Stock moved to damaged from the AT Stock page.</p></div>
+      <div class="at-stock-actions">
+        <label>From <input type="date" id="at-damages-from" value="${today.slice(0, 8)}01"></label>
+        <label>To <input type="date" id="at-damages-to" value="${today}"></label>
+        <button class="button button-secondary" id="export-at-damages" type="button">Export Excel</button>
+      </div>
+    </div>
+    <div class="dialog-error" id="at-damages-error" role="alert" hidden></div>
+    <div class="at-stock-table-wrap">
+      <table class="at-stock-table">
+        <thead><tr><th>Date</th><th>Category</th><th>Product</th><th>Damaged quantity</th></tr></thead>
+        <tbody id="at-damages-rows"></tbody>
+      </table>
+    </div>
+    <p class="at-stock-empty" id="at-damages-empty" hidden>No damaged stock was recorded in this period.</p>`;
+  assignment.insertAdjacentElement('afterend', damages);
+  document.querySelector('#at-damages-from').addEventListener('change', loadAtDamages);
+  document.querySelector('#at-damages-to').addEventListener('change', loadAtDamages);
+  document.querySelector('#export-at-damages').addEventListener('click', () => {
+    const from = document.querySelector('#at-damages-from').value;
+    const to = document.querySelector('#at-damages-to').value;
+    if (!from || !to) return showToast('Choose from and to dates before exporting.', true);
+    downloadExcelReport(`/api/profitability/damages?${new URLSearchParams({ fromDate: from, toDate: to, format: 'xlsx' })}`, `Damages-${from}-to-${to}.xlsx`, document.querySelector('#export-at-damages'));
+  });
+}
+
+async function loadAtDamages() {
+  const from = document.querySelector('#at-damages-from').value;
+  const to = document.querySelector('#at-damages-to').value;
+  const errorElement = document.querySelector('#at-damages-error');
+  errorElement.hidden = true;
+  if (!from || !to) return;
+  try {
+    const report = await requestJson(`/api/profitability/damages?${new URLSearchParams({ fromDate: from, toDate: to })}`);
+    document.querySelector('#at-damages-empty').hidden = report.entries.length > 0;
+    document.querySelector('#at-damages-rows').innerHTML = report.entries.map(entry => `<tr>
+      <td data-label="Date">${formatDate(entry.date)}</td>
+      <td data-label="Category">${entry.category}</td>
+      <td data-label="Product" title="${escapeHtml(entry.itemName)}">${escapeHtml(entry.displayName)}</td>
+      <td data-label="Damaged quantity">${entry.display ? escapeHtml(entry.display) : `${formatStockNumber(entry.quantity)} kg`}</td>
+    </tr>`).join('');
+  } catch (error) {
+    errorElement.textContent = error.message;
+    errorElement.hidden = false;
+  }
 }
 
 async function toggleAtAssigned(event) {
@@ -812,12 +867,15 @@ function showDashboardPage(page) {
   const isAtAssignment = page === 'at-assignment' && ['admin', 'manager'].includes(currentUser?.role);
   const isManagerUpload = page === 'profitability' && currentUser?.role === 'manager';
   const isProfitability = page === 'profitability' && (isAdmin || isManagerUpload);
-  const isAtArea = isAtStock || isAtAssignment;
+  const isAtDamages = page === 'at-damages' && ['admin', 'manager'].includes(currentUser?.role);
+  const isAtArea = isAtStock || isAtAssignment || isAtDamages;
   const isProfitabilityArea = isProfitability || isAtArea;
   document.querySelector('#overview').hidden = isProfitabilityArea;
   document.querySelector('#profitability').hidden = !isProfitabilityArea;
   document.querySelector('#profitability-at-stock-report').hidden = !isAtStock;
   document.querySelector('#profitability-at-assignment-report').hidden = !isAtAssignment;
+  document.querySelector('#profitability-at-damages-report').hidden = !isAtDamages;
+  document.querySelector('.profitability-controls').hidden = isAtDamages;
   document.querySelector('.profitability-tabs').hidden = isAtArea || isManagerUpload;
   document.querySelector('#profitability-sku-report').hidden = isAtArea;
   document.querySelector('#profitability-sku-report > .profitability-panel').hidden = isManagerUpload;
@@ -827,14 +885,16 @@ function showDashboardPage(page) {
   document.querySelector('.day-picker').hidden = isProfitabilityArea;
   exportButton.hidden = isProfitabilityArea || currentUser?.role === 'delivery_partner';
   document.querySelector('.breadcrumbs strong').textContent =
-    isAtAssignment ? 'Profitability / AT Assignment' : isAtStock ? 'Profitability / AT Stock' : isProfitability ? 'Profitability' : 'Deliveries';
+    isAtDamages ? 'AT Damages' : isAtAssignment ? 'AT Assignment' : isAtStock ? 'AT Stock' : isProfitability ? 'Profitability' : 'Deliveries';
   const profitabilityHeading = document.querySelector('#profitability .page-heading h1');
-  profitabilityHeading.innerHTML = isManagerUpload ? 'Sales register <span>upload.</span>' : isAtAssignment ? 'AT Assignment <span>by agent.</span>' : isAtStock ? 'AT Stock <span>management.</span>' : 'Profitability <span>reports.</span>';
+  profitabilityHeading.innerHTML = isManagerUpload ? 'Sales register <span>upload.</span>' : isAtDamages ? 'AT Damages <span>register.</span>' : isAtAssignment ? 'AT Assignment <span>by agent.</span>' : isAtStock ? 'AT Stock <span>management.</span>' : 'Profitability <span>reports.</span>';
   document.querySelector('#profitability .page-heading .eyebrow').innerHTML = isAtArea
     ? '<span class="eyebrow-dot"></span> INVENTORY MANAGEMENT'
     : isManagerUpload ? '<span class="eyebrow-dot"></span> SALES REGISTER UPLOAD'
     : '<span class="eyebrow-dot"></span> ADMIN ONLY · FINANCIAL REPORTING';
-  document.querySelector('#profitability .page-heading .page-subtitle').textContent = isAtAssignment
+  document.querySelector('#profitability .page-heading .page-subtitle').textContent = isAtDamages
+    ? 'Every AT and BC item moved to damaged, kept separate from live stock.'
+    : isAtAssignment
     ? 'See which delivery agent needs which AT and BC items, based on the sales register and Deliveries assignments.'
     : isAtStock
     ? 'Track opening stock, sales, returns, purchases, and closing stock for AT and BC products.'
@@ -846,6 +906,8 @@ function showDashboardPage(page) {
   document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
     const isActive = link.id === 'profitability-link'
       ? isProfitability
+      : link.id === 'at-damages-link'
+        ? isAtDamages
       : link.id === 'at-assignment-link'
         ? isAtAssignment
       : link.id === 'at-stock-link'
@@ -1635,11 +1697,12 @@ document.querySelector('#dashboard-date').addEventListener('change', event => {
 document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
   link.addEventListener('click', event => {
     event.preventDefault();
-    let page = link.id === 'at-assignment-link' ? 'at-assignment'
+    let page = link.id === 'at-damages-link' ? 'at-damages'
+      : link.id === 'at-assignment-link' ? 'at-assignment'
       : link.id === 'at-stock-link' ? 'at-stock'
       : link.id === 'profitability-link' ? 'profitability' : 'deliveries';
     if (page === 'profitability' && !['admin', 'manager'].includes(currentUser?.role)) return;
-    if (['at-stock', 'at-assignment'].includes(page) && !['admin', 'manager'].includes(currentUser?.role)) return;
+    if (['at-stock', 'at-assignment', 'at-damages'].includes(page) && !['admin', 'manager'].includes(currentUser?.role)) return;
     showDashboardPage(page);
     if (page === 'profitability' && currentUser.role === 'admin') {
       showProfitabilityTab('sku');
@@ -1647,6 +1710,7 @@ document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
     }
     if (page === 'at-stock') loadAtStockReport();
     if (page === 'at-assignment') loadAtAssignmentReport();
+    if (page === 'at-damages') loadAtDamages();
   });
 });
 document.querySelector('#import-profit-sales').addEventListener('click', () => {

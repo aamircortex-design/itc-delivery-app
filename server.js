@@ -1919,6 +1919,52 @@ app.get('/api/profitability/at-assignment', async (req, res) => {
   }
 });
 
+app.get('/api/profitability/damages', async (req, res) => {
+  if (!['admin', 'manager'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Administrator or manager access is required for damages.' });
+  }
+  const fromDate = normalizeDeliveryDate(req.query.fromDate);
+  const toDate = normalizeDeliveryDate(req.query.toDate);
+  if (!fromDate || !toDate || fromDate > toDate) {
+    return res.status(400).json({ error: 'Choose a valid from and to date.' });
+  }
+  try {
+    const rows = await req.app.locals.db.all(
+      `SELECT stock_date AS date, UPPER(TRIM(sales_category)) AS category, TRIM(item_name) AS itemName, damaged_qty AS damagedQty
+       FROM at_stock_daily
+       WHERE company_id = ? AND stock_date BETWEEN ? AND ? AND damaged_qty > 0
+       ORDER BY stock_date DESC, category, item_name`,
+      [req.user.companyId, fromDate, toDate]
+    );
+    const entries = rows.map(row => {
+      const packWeightKg = row.category === 'AT' ? getAtPackWeightKg(row.itemName) : null;
+      const item = { category: row.category, packWeightKg };
+      return {
+        date: row.date,
+        category: row.category,
+        itemName: row.itemName,
+        displayName: row.category === 'AT' ? getAtDisplayName(row.itemName, packWeightKg) : row.itemName,
+        quantity: Number(row.damagedQty),
+        display: formatAtQuantity(item, Number(row.damagedQty))
+      };
+    });
+    if (req.query.format === 'xlsx') {
+      return sendXlsx(res, createWorkbook([{
+        name: 'Damages',
+        rows: [
+          ['Date', 'Category', 'Product', 'Damaged quantity'],
+          ...entries.map(entry => [entry.date, entry.category, entry.displayName, entry.display])
+        ],
+        autoFilterRow: 1
+      }]), `Damages-${fromDate}-to-${toDate}.xlsx`);
+    }
+    res.json({ fromDate, toDate, entries });
+  } catch (error) {
+    console.error('Damages report failed:', error);
+    res.status(500).json({ error: 'Unable to load damaged stock.' });
+  }
+});
+
 app.get('/api/profitability/report', async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Administrator access is required to view profitability reports.' });
