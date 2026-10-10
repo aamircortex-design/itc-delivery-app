@@ -91,10 +91,12 @@ function getAtDisplayName(itemName, packWeightKg) {
   const name = String(itemName).toUpperCase();
   const variants = [
     [/MULTIGRAIN/, 'MULTIGRAINS'], [/SELECT/, 'SELECT'], [/RAGI/, 'RAGI'],
-    [/MILLETS/, 'MILLETS'], [/SUPERIOR/, 'SUPERIOR MP'], [/MPATTA/, 'MP']
+    [/MILLETS/, 'MILLETS'], [/SUPERIOR/, 'SUPERIOR MP'], [/MPATTA/, 'MP'],
+    [/\bSRC\b|SUGAR RELEASE|SUGRA RELEASE/, 'SRC']
   ];
   const variant = variants.find(([pattern]) => pattern.test(name))?.[1];
   const size = !packWeightKg ? '' : packWeightKg < 1 ? `${Math.round(packWeightKg * 1000)}G` : `${packWeightKg}KG`;
+  if (/GRAM FLOUR|BESAN/.test(name)) return ['GRAM FLOUR', size].filter(Boolean).join(' ');
   return ['ATTA', variant, size].filter(Boolean).join(' ');
 }
 
@@ -1634,11 +1636,23 @@ app.post('/api/profitability/product-costs', upload.single('file'), async (req, 
 });
 
 // All 2 kg atta packs are the same stock regardless of variant or code.
+const AT_EXTRA_PRODUCTS = [
+  { category: 'AT', itemCode: '', itemName: 'ATTA SELECT 5KG' },
+  { category: 'AT', itemCode: '', itemName: 'ATTA MULTIGRAINS 5KG' },
+  { category: 'AT', itemCode: '', itemName: 'GRAM FLOUR 200G' },
+  { category: 'AT', itemCode: '', itemName: 'ATTA SRC 1KG' }
+];
+
 function canonicalAtProduct(product) {
-  const category = product.category;
-  if (category === 'AT' && getAtPackWeightKg(product.itemName) === 2) {
-    return { ...product, itemCode: '', itemName: 'ATTA 2KG' };
-  }
+  if (product.category !== 'AT') return product;
+  const name = String(product.itemName || '').toUpperCase();
+  const weight = getAtPackWeightKg(product.itemName);
+  const merged = itemName => ({ ...product, itemCode: '', itemName });
+  if (weight === 2) return merged('ATTA 2KG');
+  if (weight === 5 && /SELECT/.test(name)) return merged('ATTA SELECT 5KG');
+  if (weight === 5 && /MULTIGRAIN/.test(name)) return merged('ATTA MULTIGRAINS 5KG');
+  if (weight === 0.2 && /GRAM FLOUR|BESAN/.test(name)) return merged('GRAM FLOUR 200G');
+  if (/\bSRC\b|SUGAR RELEASE|SUGRA RELEASE/.test(name)) return merged('ATTA SRC 1KG');
   return product;
 }
 
@@ -1791,7 +1805,7 @@ app.get('/api/profitability/at-stock', async (req, res) => {
 
     const lockedProducts = await getLockedAtProducts(req.app.locals.db, req.user.companyId, selectedDate);
     const uniqueProducts = new Map();
-    for (const product of products) {
+    for (const product of [...products, ...AT_EXTRA_PRODUCTS]) {
       const canonical = canonicalAtProduct(product);
       uniqueProducts.set(atProductKey(canonical), canonical);
     }
@@ -1901,7 +1915,7 @@ app.put('/api/profitability/at-stock/:date', async (req, res) => {
       [req.user.companyId, req.user.companyId]
     );
     const productKey = atProductKey;
-    const knownProductKeys = new Set(knownProducts.map(productKey));
+    const knownProductKeys = new Set([...knownProducts, ...AT_EXTRA_PRODUCTS].map(productKey));
     const lockedProducts = req.user.role === 'admin' ? new Set() : await getLockedAtProducts(db, req.user.companyId, selectedDate);
     for (const entry of entries) {
       if (lockedProducts.has(atProductKey(entry))) continue;
@@ -1957,7 +1971,7 @@ app.patch('/api/profitability/at-stock/:date/tallied', async (req, res) => {
               TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName
        FROM profitability_sales WHERE company_id = ?`,
       [req.user.companyId]
-    )).some(row => atProductKey(row) === atProductKey({ category, itemCode, itemName }));
+    )).concat(AT_EXTRA_PRODUCTS).some(row => atProductKey(row) === atProductKey({ category, itemCode, itemName }));
     if (!known) return res.status(400).json({ error: 'This product is not in the uploaded sales data.' });
     const product = canonicalAtProduct({ category, itemCode, itemName });
     if (req.user.role !== 'admin') {
