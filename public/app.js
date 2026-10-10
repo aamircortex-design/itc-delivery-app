@@ -623,6 +623,13 @@ function renderStockEntryInputs(row, field, baseQuantity, editable) {
       <span>pcs</span></label>`;
   }
   if (!row.packWeightKg) return '<span class="at-stock-missing-pack">Add kg pack size to item name</span>';
+  if (row.packWeightKg >= 5) {
+    return `<div class="at-stock-units">
+    <label class="at-stock-input"><span class="visually-hidden">${field} pieces for ${escapeHtml(row.itemName)}</span>
+      <input type="number" min="0" step="any" data-stock-${field}-pcs value="${formatStockNumber(Math.round(baseQuantity / row.packWeightKg * 100) / 100)}" ${disabled ? 'disabled' : ''}>
+      <span>pcs</span></label>
+  </div>`;
+  }
   const count = getBagAndPieceCounts(baseQuantity, row.packWeightKg);
   return `<div class="at-stock-units">
     <label class="at-stock-input"><span class="visually-hidden">${field} 30 kg bags for ${escapeHtml(row.itemName)}</span>
@@ -698,7 +705,7 @@ async function saveAtStock() {
       return value === '' ? NaN : Number(value);
     };
     const getQuantity = field => category === 'AT'
-      ? readInput(`[data-stock-${field}-bags]`) * 30 +
+      ? (row.querySelector(`[data-stock-${field}-bags]`) ? readInput(`[data-stock-${field}-bags]`) * 30 : 0) +
         readInput(`[data-stock-${field}-pcs]`) * weight
       : readInput(`[data-stock-${field}-pcs]`);
     return {
