@@ -1370,10 +1370,56 @@ app.post('/api/profitability/bill-tracker/ignore', async (req, res) => {
   }
   res.json(await buildBillTracker(db, req.user.companyId, req.body?.source));
 });
+const UPLOAD_LOCK_DAYS = 3;
+
+function getIndiaToday() {
+  return new Date(Date.now() + 330 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+async function getUploadLock(db, companyId) {
+  const today = getIndiaToday();
+  const cutoff = new Date(Date.parse(`${today}T00:00:00Z`) - UPLOAD_LOCK_DAYS * 86400000).toISOString().slice(0, 10);
+  const bills = await db.all(
+    `SELECT bill_no AS billNo, outlet_name AS outletName, status,
+            COALESCE(NULLIF(delivery_date, ''), substr(created_at, 1, 10)) AS billDate
+     FROM bills
+     WHERE company_id = ?
+       AND status NOT IN ('Completed', 'Returned', 'Cancelled')
+       AND COALESCE(NULLIF(delivery_date, ''), substr(created_at, 1, 10)) < ?
+     ORDER BY billDate, bill_no`,
+    [companyId, cutoff]
+  );
+  const count = bills.length;
+  return {
+    locked: count > 0,
+    days: UPLOAD_LOCK_DAYS,
+    count,
+    bills: bills.slice(0, 50),
+    message: count
+      ? `Sales uploads are disabled: ${count} deliver${count === 1 ? 'y has' : 'ies have'} been pending for more than ${UPLOAD_LOCK_DAYS} days (oldest bill dated ${bills[0].billDate}). Complete, return or cancel them to continue.`
+      : ''
+  };
+}
+
+async function rejectIfUploadLocked(req, res) {
+  const lock = await getUploadLock(req.app.locals.db, req.user.companyId);
+  if (lock.locked) {
+    res.status(423).json({ error: lock.message });
+    return true;
+  }
+  return false;
+}
+
+app.get('/api/upload-lock', async (req, res) => {
+  if (!['admin', 'manager'].includes(req.user.role)) return res.json({ locked: false, count: 0, bills: [], message: '' });
+  res.json(await getUploadLock(req.app.locals.db, req.user.companyId));
+});
+
 app.post('/api/profitability/sales', upload.single('file'), async (req, res) => {
   if (!['admin', 'manager'].includes(req.user.role)) {
     return res.status(403).json({ error: 'Administrator or manager access is required to import the sales register.' });
   }
+  if (await rejectIfUploadLocked(req, res)) return;
   if (!req.file) return res.status(400).json({ error: 'Choose a sales register file to upload.' });
 
   let transactionOpen = false;
@@ -2791,6 +2837,7 @@ app.post('/api/bills/upload', upload.single('file'), async (req, res) => {
   if (req.user.role === 'delivery_partner') {
     return res.status(403).json({ error: 'Only administrators and managers can import deliveries.' });
   }
+  if (await rejectIfUploadLocked(req, res)) return;
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
   let transactionOpen = false;

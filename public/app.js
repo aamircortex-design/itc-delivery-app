@@ -294,7 +294,27 @@ function renderRows() {
   updateSummary();
 }
 
+let uploadLock = { locked: false };
+
+async function loadUploadLock() {
+  if (!currentUser || !['admin', 'manager'].includes(currentUser.role)) return;
+  try {
+    uploadLock = await requestJson('/api/upload-lock');
+  } catch (error) {
+    return;
+  }
+  for (const page of ['deliveries', 'profitability']) {
+    const banner = document.querySelector(`#upload-lock-banner-${page}`);
+    banner.textContent = uploadLock.message || '';
+    banner.hidden = !uploadLock.locked;
+  }
+  document.querySelector('#open-upload').disabled = uploadLock.locked;
+  document.querySelector('#empty-upload').disabled = uploadLock.locked;
+  document.querySelector('#import-profit-sales').disabled = uploadLock.locked;
+}
+
 async function loadDeliveries() {
+  loadUploadLock();
   const result = await requestJson('/api/bills');
   if (!Array.isArray(result)) {
     throw new Error('The server returned an unexpected delivery list.');
@@ -1437,6 +1457,7 @@ async function downloadExcelReport(endpoint, filename, button) {
 }
 
 function openUploadDialog() {
+  if (uploadLock.locked) return;
   selectedFile = null;
   fileInput.value = '';
   document.querySelector('#import-date').value = selectedDeliveryDate;
@@ -2055,7 +2076,7 @@ document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
       showProfitabilityTab('sku');
       loadProfitabilityReport();
     }
-    if (page === 'profitability') loadBillTracker();
+    if (page === 'profitability') { loadBillTracker(); loadUploadLock(); }
     if (page === 'k4') openK4Page();
     if (page === 'at-stock') loadAtStockReport();
     if (page === 'at-assignment') loadAtAssignmentReport();

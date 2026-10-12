@@ -480,3 +480,5 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .bill-tracker-list li span { color: #6b7a72; }
 .bill-tracker-list .button { min-height: 24px; padding: 0 8px; font-size: 11px; }
 .bill-tracker[hidden] { display: none; }
+.upload-lock-banner { margin: 0 0 16px; padding: 12px 14px; border: 1px solid #f0b9b9; border-radius: 8px; background: #fdecec; color: #a12727; font-weight: 600; }
+.upload-lock-banner[hidden] { display: none; }
