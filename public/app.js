@@ -344,6 +344,7 @@ async function loadCurrentUser() {
   document.querySelector('#user-management-link').hidden = user.role !== 'admin';
   document.querySelector('#profitability-link').hidden = user.role === 'delivery_partner';
   document.querySelector('#at-stock-link').hidden = !['admin', 'manager'].includes(user.role);
+  document.querySelector('#k4-link').hidden = user.role !== 'admin';
   document.querySelector('#open-upload').hidden = user.role === 'delivery_partner';
   document.querySelector('#download-template').hidden = user.role === 'delivery_partner';
   document.querySelector('#modal-template').hidden = user.role === 'delivery_partner';
@@ -374,6 +375,7 @@ async function loadCurrentUser() {
   document.querySelector('#empty-upload').hidden = user.role === 'delivery_partner';
   initializeProfitabilityDates();
   initializeAtStockInterface();
+  initializeK4Interface();
   showDashboardPage('deliveries');
   renderRows();
 }
@@ -751,6 +753,82 @@ async function saveAtStock() {
   }
 }
 
+function initializeK4Interface() {
+  if (document.querySelector('#profitability-k4-report')) return;
+  const today = getLocalDateValue();
+  const panel = document.createElement('section');
+  panel.className = 'profitability-panel at-stock-report';
+  panel.id = 'profitability-k4-report';
+  panel.hidden = true;
+  panel.innerHTML = `
+    <div class="at-stock-heading">
+      <div><h3>K4 delivery amount receivable</h3><p id="k4-report-date"></p></div>
+      <div class="at-stock-actions"><button class="button button-secondary" id="export-k4-report" type="button">Export Excel</button></div>
+    </div>
+    <div class="rfa-filters" style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0">
+      <label>From date <input type="date" id="k4-from-date" value="${today.slice(0, 7)}-01"></label>
+      <label>To date <input type="date" id="k4-to-date" value="${today}"></label>
+    </div>
+    <div class="dialog-error" id="k4-report-error" role="alert" hidden></div>
+    <p><strong>Total net sales:</strong> <span id="k4-total-sales">—</span></p>
+    <p><strong>Delivery amount receivable from company:</strong> <span id="k4-total-receivable">—</span></p>
+    <div class="at-stock-table-wrap">
+      <table class="at-stock-table">
+        <thead><tr><th>Category</th><th>Net sales</th><th>Rate</th><th>Delivery amount receivable</th></tr></thead>
+        <tbody id="k4-report-rows"></tbody>
+      </table>
+    </div>
+    <p class="at-stock-empty" id="k4-report-empty" hidden>No sales found for these dates. Upload sales registers on Profitability first.</p>
+    <p class="at-stock-note">Net sales come from the uploaded sales register. Delivery amount receivable is 1.5% of net sales, and 2% for the SX category.</p>`;
+  document.querySelector('.profitability-controls').insertAdjacentElement('afterend', panel);
+  document.querySelector('#k4-from-date').addEventListener('change', loadK4Report);
+  document.querySelector('#k4-to-date').addEventListener('change', loadK4Report);
+  document.querySelector('#export-k4-report').addEventListener('click', () => {
+    const fromDate = document.querySelector('#k4-from-date').value;
+    const toDate = document.querySelector('#k4-to-date').value;
+    if (!fromDate || !toDate || fromDate > toDate) {
+      showToast('Choose a valid from and to date before exporting.', true);
+      return;
+    }
+    const query = new URLSearchParams({ fromDate, toDate, format: 'xlsx' });
+    downloadExcelReport(
+      `/api/profitability/k4-report?${query}`,
+      `K4-Delivery-Receivable-${fromDate}-to-${toDate}.xlsx`,
+      document.querySelector('#export-k4-report')
+    );
+  });
+}
+
+async function loadK4Report() {
+  const fromDate = document.querySelector('#k4-from-date').value;
+  const toDate = document.querySelector('#k4-to-date').value;
+  const errorElement = document.querySelector('#k4-report-error');
+  errorElement.hidden = true;
+  if (!fromDate || !toDate || fromDate > toDate) {
+    errorElement.textContent = !fromDate || !toDate
+      ? 'Choose both a from date and a to date.'
+      : 'The from date must be on or before the to date.';
+    errorElement.hidden = false;
+    return;
+  }
+  try {
+    const report = await requestJson(`/api/profitability/k4-report?${new URLSearchParams({ fromDate, toDate })}`);
+    document.querySelector('#k4-total-sales').textContent = formatCurrency(report.totalNetSales);
+    document.querySelector('#k4-total-receivable').textContent = formatCurrency(report.totalReceivable);
+    document.querySelector('#k4-report-date').textContent = `From ${formatDate(report.fromDate)} to ${formatDate(report.toDate)}`;
+    document.querySelector('#k4-report-rows').innerHTML = report.rows.map(row => `<tr>
+      <td data-label="Category">${escapeHtml(row.category)}</td>
+      <td data-label="Net sales">${formatCurrency(row.netSales)}</td>
+      <td data-label="Rate">${row.ratePercent}%</td>
+      <td data-label="Delivery amount receivable">${formatCurrency(row.receivable)}</td>
+    </tr>`).join('');
+    document.querySelector('#k4-report-empty').hidden = report.rows.length > 0;
+  } catch (error) {
+    errorElement.textContent = error.message;
+    errorElement.hidden = false;
+  }
+}
+
 function renderRfaReport(report) {
   document.querySelector('#rfa-report-total').textContent = formatCurrency(report.totalNetRfa);
   document.querySelector('#rfa-report-date').textContent =
@@ -922,14 +1000,16 @@ function showDashboardPage(page) {
   const isManagerUpload = page === 'profitability' && currentUser?.role === 'manager';
   const isProfitability = page === 'profitability' && (isAdmin || isManagerUpload);
   const isAtDamages = page === 'at-damages' && ['admin', 'manager'].includes(currentUser?.role);
+  const isK4 = page === 'k4' && isAdmin;
   const isAtArea = isAtStock || isAtAssignment || isAtDamages;
-  const isProfitabilityArea = isProfitability || isAtArea;
+  const isProfitabilityArea = isProfitability || isAtArea || isK4;
   document.querySelector('#overview').hidden = isProfitabilityArea;
   document.querySelector('#profitability').hidden = !isProfitabilityArea;
   document.querySelector('#profitability-at-stock-report').hidden = !isAtStock;
   document.querySelector('#profitability-at-assignment-report').hidden = !isAtAssignment;
   document.querySelector('#profitability-at-damages-report').hidden = !isAtDamages;
-  document.querySelector('.profitability-controls').hidden = isAtDamages;
+  document.querySelector('#profitability-k4-report').hidden = !isK4;
+  document.querySelector('.profitability-controls').hidden = isAtDamages || isK4;
   const atTabs = document.querySelector('#at-bc-tabs');
   atTabs.hidden = !isAtArea;
   atTabs.querySelectorAll('[data-at-tab]').forEach(tab => {
@@ -937,23 +1017,27 @@ function showDashboardPage(page) {
     tab.classList.toggle('active', active);
     tab.setAttribute('aria-selected', String(active));
   });
-  document.querySelector('.profitability-tabs:not(#at-bc-tabs)').hidden = isAtArea || isManagerUpload;
-  document.querySelector('#profitability-sku-report').hidden = isAtArea;
+  document.querySelector('.profitability-tabs:not(#at-bc-tabs)').hidden = isAtArea || isK4 || isManagerUpload;
+  document.querySelector('#profitability-sku-report').hidden = isAtArea || isK4;
   document.querySelector('#profitability-sku-report > .profitability-panel').hidden = isManagerUpload;
   document.querySelector('#profitability-sku-report > .page-footer').hidden = isManagerUpload;
   document.querySelector('#import-profit-costs').closest('.profitability-import-card').hidden = isManagerUpload;
-  document.querySelector('#profitability-rfa-report').hidden = isAtArea || isManagerUpload || document.querySelector('#profitability-rfa-tab-button').getAttribute('aria-selected') !== 'true';
+  document.querySelector('#profitability-rfa-report').hidden = isAtArea || isK4 || isManagerUpload || document.querySelector('#profitability-rfa-tab-button').getAttribute('aria-selected') !== 'true';
   document.querySelector('.day-picker').hidden = isProfitabilityArea;
   exportButton.hidden = isProfitabilityArea || currentUser?.role === 'delivery_partner';
   document.querySelector('.breadcrumbs strong').textContent =
-    isAtArea ? 'AT & BC' : isProfitability ? 'Profitability' : 'Deliveries';
+    isAtArea ? 'AT & BC' : isK4 ? 'K4' : isProfitability ? 'Profitability' : 'Deliveries';
   const profitabilityHeading = document.querySelector('#profitability .page-heading h1');
-  profitabilityHeading.innerHTML = isManagerUpload ? 'Sales register <span>upload.</span>' : isAtDamages ? 'AT Damages <span>register.</span>' : isAtAssignment ? 'AT Assignment <span>by agent.</span>' : isAtStock ? 'AT Stock <span>management.</span>' : 'Profitability <span>reports.</span>';
-  document.querySelector('#profitability .page-heading .eyebrow').innerHTML = isAtArea
+  profitabilityHeading.innerHTML = isK4 ? 'K4 delivery <span>receivable.</span>' : isManagerUpload ? 'Sales register <span>upload.</span>' : isAtDamages ? 'AT Damages <span>register.</span>' : isAtAssignment ? 'AT Assignment <span>by agent.</span>' : isAtStock ? 'AT Stock <span>management.</span>' : 'Profitability <span>reports.</span>';
+  document.querySelector('#profitability .page-heading .eyebrow').innerHTML = isK4
+    ? '<span class="eyebrow-dot"></span> ADMIN ONLY · COMPANY RECEIVABLES'
+    : isAtArea
     ? '<span class="eyebrow-dot"></span> INVENTORY MANAGEMENT'
     : isManagerUpload ? '<span class="eyebrow-dot"></span> SALES REGISTER UPLOAD'
     : '<span class="eyebrow-dot"></span> ADMIN ONLY · FINANCIAL REPORTING';
-  document.querySelector('#profitability .page-heading .page-subtitle').textContent = isAtDamages
+  document.querySelector('#profitability .page-heading .page-subtitle').textContent = isK4
+    ? 'Delivery cost still receivable from the company, based on uploaded net sales.'
+    : isAtDamages
     ? 'Every AT and BC item moved to damaged, kept separate from live stock.'
     : isAtAssignment
     ? 'See which delivery agent needs which AT and BC items, based on the sales register and Deliveries assignments.'
@@ -969,6 +1053,8 @@ function showDashboardPage(page) {
       ? isProfitability
       : link.id === 'at-stock-link'
         ? isAtArea
+        : link.id === 'k4-link'
+          ? isK4
         : link.id === 'deliveries-link'
           ? !isProfitabilityArea
           : false;
@@ -1779,14 +1865,17 @@ document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
   link.addEventListener('click', event => {
     event.preventDefault();
     let page = link.id === 'at-stock-link' ? 'at-stock'
+      : link.id === 'k4-link' ? 'k4'
       : link.id === 'profitability-link' ? 'profitability' : 'deliveries';
     if (page === 'profitability' && !['admin', 'manager'].includes(currentUser?.role)) return;
+    if (page === 'k4' && currentUser?.role !== 'admin') return;
     if (['at-stock', 'at-assignment', 'at-damages'].includes(page) && !['admin', 'manager'].includes(currentUser?.role)) return;
     showDashboardPage(page);
     if (page === 'profitability' && currentUser.role === 'admin') {
       showProfitabilityTab('sku');
       loadProfitabilityReport();
     }
+    if (page === 'k4') loadK4Report();
     if (page === 'at-stock') loadAtStockReport();
     if (page === 'at-assignment') loadAtAssignmentReport();
     if (page === 'at-damages') loadAtDamages();

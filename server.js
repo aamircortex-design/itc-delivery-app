@@ -2463,6 +2463,69 @@ app.get('/api/profitability/rfa-report', async (req, res) => {
   }
 });
 
+const K4_STANDARD_RATE = 0.015;
+const K4_SX_RATE = 0.02;
+
+app.get('/api/profitability/k4-report', async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Administrator access is required to view the K4 report.' });
+  }
+  const fromDate = normalizeDeliveryDate(req.query.fromDate);
+  const toDate = normalizeDeliveryDate(req.query.toDate);
+  if (!fromDate || !toDate) {
+    return res.status(400).json({ error: 'Choose valid from and to dates for the K4 report.' });
+  }
+  if (fromDate > toDate) {
+    return res.status(400).json({ error: 'The from date must be on or before the to date.' });
+  }
+
+  try {
+    const sales = await req.app.locals.db.all(
+      `SELECT COALESCE(NULLIF(TRIM(sales_category), ''), 'Uncategorized') AS category,
+              SUM(gross_amount) AS netSales
+       FROM profitability_sales
+       WHERE company_id = ? AND sales_date BETWEEN ? AND ?
+       GROUP BY category COLLATE NOCASE
+       ORDER BY category COLLATE NOCASE`,
+      [req.user.companyId, fromDate, toDate]
+    );
+    const rows = sales.map(row => {
+      const isSx = /(^|[^A-Z])SX([^A-Z]|$)/i.test(row.category);
+      const rate = isSx ? K4_SX_RATE : K4_STANDARD_RATE;
+      const netSales = Number(row.netSales) || 0;
+      return { category: row.category, netSales, ratePercent: rate * 100, receivable: netSales * rate };
+    });
+    const report = {
+      fromDate,
+      toDate,
+      totalNetSales: rows.reduce((total, row) => total + row.netSales, 0),
+      totalReceivable: rows.reduce((total, row) => total + row.receivable, 0),
+      rows
+    };
+    if (req.query.format === 'xlsx') {
+      const workbook = createWorkbook([{
+        name: 'K4 Delivery Receivable',
+        rows: [
+          ['K4 Delivery Amount Receivable from Company'],
+          ['From Date', fromDate],
+          ['To Date', toDate],
+          ['Total Net Sales', report.totalNetSales],
+          ['Total Delivery Amount Receivable', report.totalReceivable],
+          [],
+          ['Category', 'Net Sales', 'Rate %', 'Delivery Amount Receivable'],
+          ...rows.map(row => [row.category, row.netSales, row.ratePercent, row.receivable])
+        ],
+        autoFilterRow: 7
+      }]);
+      return sendXlsx(res, workbook, `K4-Delivery-Receivable-${fromDate}-to-${toDate}.xlsx`);
+    }
+    res.json(report);
+  } catch (error) {
+    console.error('Could not create K4 report:', error);
+    res.status(500).json({ error: 'Could not create the K4 report. Please try again.' });
+  }
+});
+
 app.post('/api/bills/upload', upload.single('file'), async (req, res) => {
   if (req.user.role === 'delivery_partner') {
     return res.status(403).json({ error: 'Only administrators and managers can import deliveries.' });
