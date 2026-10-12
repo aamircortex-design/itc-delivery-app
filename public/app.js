@@ -794,7 +794,7 @@ function initializeK4Interface() {
     </div>
     <div class="at-stock-table-wrap">
       <table class="at-stock-table">
-        <thead><tr><th>Category</th><th>Net sales</th><th>Rate</th><th>Delivery amount receivable</th></tr></thead>
+        <thead><tr><th>Category</th><th>Net sales (Total)</th><th>Rate</th><th>Delivery amount receivable</th></tr></thead>
         <tbody id="k4-report-rows"></tbody>
       </table>
     </div>
@@ -916,6 +916,10 @@ async function loadK4Report() {
       <td data-label="Delivery amount receivable">${formatCurrency(row.receivable)}</td>
     </tr>`).join('');
     document.querySelector('#k4-report-empty').hidden = report.rows.length > 0;
+    if (report.rowsWithoutTotal > 0) {
+      errorElement.textContent = ` sales lines were uploaded before the Total column was read, so their Gross Amount is used. Re-upload those dates' sales registers on Profitability to use the Total column.`;
+      errorElement.hidden = false;
+    }
     const line = (label, value) => `<tr><th scope="row">${label}</th><td>${value}</td></tr>`;
     document.querySelector('#k4-summary-rows').innerHTML = [
       line('Total net sales', formatCurrency(report.totalNetSales)),

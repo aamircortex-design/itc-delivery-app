@@ -277,6 +277,9 @@ async function initDb() {
   if (!profitabilitySalesColumns.some(column => column.name === 'sales_return_qty')) {
     await db.exec('ALTER TABLE profitability_sales ADD COLUMN sales_return_qty REAL NOT NULL DEFAULT 0');
   }
+  if (!profitabilitySalesColumns.some(column => column.name === 'total_amount')) {
+    await db.exec('ALTER TABLE profitability_sales ADD COLUMN total_amount REAL');
+  }
   if (!profitabilitySalesColumns.some(column => column.name === 'sales_category')) {
     await db.exec("ALTER TABLE profitability_sales ADD COLUMN sales_category TEXT NOT NULL DEFAULT 'Uncategorized'");
   }

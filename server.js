@@ -980,6 +980,7 @@ const headerAliases = {
   salesReturnQty: ['salesreturnqty', 'salesreturnquantity', 'salesreturnqnty', 'returnqty', 'returnquantity', 'returnedqty', 'srqty'],
   invoiceDate: ['invoicedate', 'invoicesrdate', 'invoicesalesdate', 'salesdate', 'billdate', 'date', 'purchasedate', 'purchaseregisterdate'],
   grossAmount: ['grossamount', 'pretaxamount', 'taxablevalue', 'taxableamount', 'assessablevalue'],
+  totalAmount: ['total'],
   rfaAmount: ['totaldiscount', 'discountamount', 'claimamount', 'rfa', 'rfaamount'],
   outputTax: ['taxgroupamount', 'outputtax', 'outputgst', 'gstamount', 'taxamount'],
   salesReturn: ['salesreturn', 'salesreturnno', 'salesreturnnumber', 'returnno'],
@@ -1303,6 +1304,7 @@ app.post('/api/profitability/sales', upload.single('file'), async (req, res) => 
       const quantity = row.quantity === '' ? 0 : parseAmount(row.quantity, 'invoice quantity', rowNumber);
       const salesReturnQty = row.salesReturnQty === '' ? 0 : Math.abs(parseAmount(row.salesReturnQty, 'sales return quantity', rowNumber));
       const grossAmount = row.grossAmount === '' ? 0 : parseAmount(row.grossAmount, 'Gross Amount', rowNumber);
+      const totalAmount = row.totalAmount === '' ? null : parseAmount(row.totalAmount, 'Total', rowNumber);
       const rfaAmount = row.rfaAmount === '' ? 0 : parseAmount(row.rfaAmount, 'Total Discount / RFA', rowNumber);
       const outputTax = row.outputTax === '' ? 0 : parseAmount(row.outputTax, 'Tax Group Amount / output tax', rowNumber);
       if (quantity === 0 && salesReturnQty === 0 && grossAmount === 0 && rfaAmount === 0 && outputTax === 0) continue;
@@ -1321,6 +1323,7 @@ app.post('/api/profitability/sales', upload.single('file'), async (req, res) => 
         existing.quantity += quantity;
         existing.salesReturnQty += salesReturnQty;
         existing.grossAmount += grossAmount;
+        if (totalAmount !== null) existing.totalAmount = (existing.totalAmount ?? 0) + totalAmount;
         existing.rfaAmount += rfaAmount;
         existing.outputTax += outputTax;
       } else {
@@ -1334,6 +1337,7 @@ app.post('/api/profitability/sales', upload.single('file'), async (req, res) => 
           quantity,
           salesReturnQty,
           grossAmount,
+          totalAmount,
           rfaAmount,
           outputTax
         });
@@ -1357,16 +1361,17 @@ app.post('/api/profitability/sales', upload.single('file'), async (req, res) => 
     for (const row of rows) {
       await db.run(
         `INSERT INTO profitability_sales
-          (company_id, sales_date, bill_no, outlet_name, item_code, item_name, quantity, sales_return_qty, sales_category, gross_amount, rfa_amount, output_tax)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (company_id, sales_date, bill_no, outlet_name, item_code, item_name, quantity, sales_return_qty, sales_category, gross_amount, rfa_amount, output_tax, total_amount)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(company_id, sales_date, bill_no, item_code, item_name)
          DO UPDATE SET outlet_name = excluded.outlet_name, quantity = excluded.quantity,
            sales_return_qty = excluded.sales_return_qty,
            sales_category = excluded.sales_category,
-           gross_amount = excluded.gross_amount, rfa_amount = excluded.rfa_amount, output_tax = excluded.output_tax`,
+           gross_amount = excluded.gross_amount, rfa_amount = excluded.rfa_amount, output_tax = excluded.output_tax,
+           total_amount = excluded.total_amount`,
         [
           req.user.companyId, row.salesDate, row.billNo, row.outletName, row.itemCode, row.itemName,
-          row.quantity, row.salesReturnQty, row.category, row.grossAmount, row.rfaAmount, row.outputTax
+          row.quantity, row.salesReturnQty, row.category, row.grossAmount, row.rfaAmount, row.outputTax, row.totalAmount
         ]
       );
     }
@@ -2615,7 +2620,8 @@ app.get('/api/profitability/k4-report', async (req, res) => {
   try {
     const sales = await req.app.locals.db.all(
       `SELECT COALESCE(NULLIF(TRIM(sales_category), ''), 'Uncategorized') AS category,
-              SUM(gross_amount) AS netSales
+              SUM(COALESCE(total_amount, gross_amount)) AS netSales,
+              SUM(CASE WHEN total_amount IS NULL THEN 1 ELSE 0 END) AS rowsWithoutTotal
        FROM profitability_sales
        WHERE company_id = ? AND sales_date BETWEEN ? AND ?
        GROUP BY category COLLATE NOCASE
@@ -2633,6 +2639,7 @@ app.get('/api/profitability/k4-report', async (req, res) => {
       toDate,
       totalNetSales: rows.reduce((total, row) => total + row.netSales, 0),
       totalReceivable: rows.reduce((total, row) => total + row.receivable, 0),
+      rowsWithoutTotal: sales.reduce((total, row) => total + Number(row.rowsWithoutTotal || 0), 0),
       rows
     };
     report.costs = await computeK4Costs(req.app.locals.db, req.user.companyId, fromDate, toDate);
