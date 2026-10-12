@@ -1130,9 +1130,9 @@ function renderBillTracker(tracker, source = 'profitability') {
   summary.textContent = ok
     ? `All bills are in sequence from ${tracker.startBill} to ${tracker.lastBill || tracker.startBill} (${tracker.importedCount} imported${tracker.ignoredCount ? `, ${tracker.ignoredCount} ignored` : ''}).`
     : `${tracker.missingCount} bill number${tracker.missingCount === 1 ? '' : 's'} missing between ${tracker.startBill} and ${tracker.lastBill} (last bill imported ${formatDate(tracker.lastDate)}). Upload the missing bills or ignore a number that is not a sale.`;
-  list.innerHTML = tracker.missing.map(item => `<li><strong>${escapeHtml(item.billNo)}</strong>${item.afterDate ? `<span>after ${escapeHtml(formatDate(item.afterDate))}</span>` : ''}<button class="button button-secondary" type="button" data-ignore-bill="${escapeHtml(item.billNo)}" data-ignored="true">Ignore</button></li>`).join('');
+  list.innerHTML = tracker.missing.map(item => `<li><strong>${escapeHtml(item.billNo)}</strong>${item.afterDate ? `<span>after ${escapeHtml(formatDate(item.afterDate))}</span>` : ''}${currentUser?.role === 'admin' ? `<button class="button button-secondary" type="button" data-ignore-bill="${escapeHtml(item.billNo)}" data-ignored="true">Ignore</button>` : ''}</li>`).join('');
   ignoredBox.hidden = !tracker.ignoredList.length;
-  ignoredList.innerHTML = tracker.ignoredList.map(billNo => `<li><strong>${escapeHtml(billNo)}</strong><button class="button button-secondary" type="button" data-ignore-bill="${escapeHtml(billNo)}" data-ignored="false">Restore</button></li>`).join('');
+  ignoredList.innerHTML = tracker.ignoredList.map(billNo => `<li><strong>${escapeHtml(billNo)}</strong>${currentUser?.role === 'admin' ? `<button class="button button-secondary" type="button" data-ignore-bill="${escapeHtml(billNo)}" data-ignored="false">Restore</button>` : ''}</li>`).join('');
 }
 
 async function loadBillTracker(source = 'profitability') {

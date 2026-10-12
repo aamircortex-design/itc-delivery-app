@@ -1356,7 +1356,7 @@ app.put('/api/profitability/bill-tracker', async (req, res) => {
 });
 
 app.post('/api/profitability/bill-tracker/ignore', async (req, res) => {
-  if (!['admin', 'manager'].includes(req.user.role)) return res.status(403).json({ error: 'Access denied.' });
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only an administrator can ignore or restore bill numbers.' });
   const billNo = String(req.body?.billNo || '').trim();
   if (!parseBillNumber(billNo) || billNo.length > 60 || typeof req.body?.ignored !== 'boolean') {
     return res.status(400).json({ error: 'Choose a valid bill number.' });
