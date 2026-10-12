@@ -157,7 +157,8 @@ function statusClass(status) {
     'In progress': 'status-in-progress',
     'Not supplied': 'status-not-supplied',
     Completed: 'status-completed',
-    Returned: 'status-returned'
+    Returned: 'status-returned',
+    Cancelled: 'status-cancelled'
   }[status] || 'status-pending';
 }
 
@@ -169,8 +170,9 @@ function updateSummary() {
     count[bill.status] = (count[bill.status] || 0) + 1;
   });
 
-  const pendingBills = dayDeliveries.filter(bill => getQuantities(bill).remaining > 0).length;
-  const pendingUnits = dayDeliveries.reduce((sum, bill) => sum + getQuantities(bill).remaining, 0);
+  const activeDeliveries = dayDeliveries.filter(bill => bill.status !== 'Cancelled');
+  const pendingBills = activeDeliveries.filter(bill => getQuantities(bill).remaining > 0).length;
+  const pendingUnits = activeDeliveries.reduce((sum, bill) => sum + getQuantities(bill).remaining, 0);
   exportButton.disabled = allDayDeliveries.length === 0;
   exportButton.title = allDayDeliveries.length
     ? `Download the ${formatDate(selectedDeliveryDate)} delivery report as an Excel workbook`
@@ -234,9 +236,15 @@ function renderRows() {
     const assignmentCell = ['admin', 'manager'].includes(currentUser?.role)
       ? `<td data-label="Delivery partner"><select class="assignment-select" data-assignment="${bill.id}" aria-label="Assign bill ${escapeHtml(bill.bill_no)}"><option value="">Unassigned</option>${deliveryPartners.map(partner => `<option value="${partner.id}" ${Number(bill.assigned_to) === partner.id ? 'selected' : ''}>${escapeHtml(partner.fullName)}</option>`).join('')}</select></td>`
       : '';
-    const actionCell = currentUser?.role === 'manager'
-      ? '<td data-label="Action"><span class="assignment-note">Assign a partner</span></td>'
-      : `<td data-label="Action"><button class="row-action" type="button" data-reconcile="${bill.id}" aria-label="Update delivery ${escapeHtml(bill.bill_no)}"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6.5 12.5 3.6 3.6 7.7-8.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.7"/></svg>Update</button></td>`;
+    const canCancel = ['admin', 'manager'].includes(currentUser?.role);
+    const cancelButton = !canCancel ? '' : bill.status === 'Cancelled'
+      ? `<button class="row-action" type="button" data-cancel-bill="${bill.id}" data-cancelled="false">Restore order</button>`
+      : `<button class="row-action row-action-cancel" type="button" data-cancel-bill="${bill.id}" data-cancelled="true">Cancel order</button>`;
+    const actionCell = bill.status === 'Cancelled'
+      ? `<td data-label="Action">${cancelButton || '<span class="assignment-note">Order cancelled</span>'}</td>`
+      : currentUser?.role === 'manager'
+      ? `<td data-label="Action"><span class="assignment-note">Assign a partner</span> ${cancelButton}</td>`
+      : `<td data-label="Action"><button class="row-action" type="button" data-reconcile="${bill.id}" aria-label="Update delivery ${escapeHtml(bill.bill_no)}"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6.5 12.5 3.6 3.6 7.7-8.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.7"/></svg>      Update</button> ${cancelButton}</td>`;
     const selectionCell = ['admin', 'manager'].includes(currentUser?.role)
       ? `<td data-label="Select"><input class="bill-select-checkbox" type="checkbox" data-select-bill="${bill.id}" aria-label="Select bill ${escapeHtml(bill.bill_no)}" ${selectedBillIds.has(bill.id) ? 'checked' : ''}></td>`
       : '';
@@ -1659,6 +1667,30 @@ document.querySelector('#delivery-rows').addEventListener('click', event => {
   if (!button) return;
   const bill = deliveries.find(delivery => delivery.id === Number(button.dataset.reconcile));
   if (bill) openReconcileDialog(bill);
+});
+document.querySelector('#delivery-rows').addEventListener('click', async event => {
+  const button = event.target.closest('[data-cancel-bill]');
+  if (!button) return;
+  const cancelled = button.dataset.cancelled === 'true';
+  const bill = deliveries.find(delivery => delivery.id === Number(button.dataset.cancelBill));
+  if (!bill) return;
+  const message = cancelled
+    ? `Mark bill ${bill.bill_no} as cancelled by the customer?`
+    : `Restore bill ${bill.bill_no} as an active order?`;
+  if (!window.confirm(message)) return;
+  button.disabled = true;
+  try {
+    const result = await requestJson('/api/bills/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ billId: bill.id, cancelled })
+    });
+    await loadDeliveries();
+    showToast(result.message);
+  } catch (error) {
+    button.disabled = false;
+    showToast(error.message);
+  }
 });
 document.querySelector('#delivery-rows').addEventListener('change', event => {
   const select = event.target.closest('[data-assignment]');

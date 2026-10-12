@@ -170,6 +170,8 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .delivery-row-completed .status-completed { color: #216b43; background: #dcefe2; }
 .status-returned { color: #8b668e; background: #f5eff6; }
 .status-not-supplied { color: #a45f28; background: #fff2e5; }
+.status-cancelled { color: #a33a3a; background: #fdeaea; }
+.row-action-cancel { color: #a33a3a; }
 .row-action { display: inline-flex; min-height: 29px; align-items: center; gap: 5px; padding: 0 8px; border: 1px solid #e7ebe8; border-radius: 5px; color: #4d6658; background: #fff; font-size: 9px; font-weight: 600; white-space: nowrap; }
 .row-action:hover { border-color: #bed4c7; color: #246745; background: #f4faf6; }
 .row-action svg { width: 12px; height: 12px; }

@@ -2712,6 +2712,7 @@ app.get('/api/bills/export', async (req, res) => {
     let pendingUnits = 0;
     let billsWithPendingItems = 0;
     let completedBills = 0;
+    let cancelledBills = 0;
     const summaryRows = [
       ['TAF Disti Desk - Daily Delivery Report'],
       ['Sales Date', selectedDate],
@@ -2745,15 +2746,19 @@ app.get('/api/bills/export', async (req, res) => {
         totals.returned += Number(item.qty_returned);
         return totals;
       }, { ordered: 0, delivered: 0, returned: 0 });
-      const remaining = Math.max(0, quantities.ordered - quantities.delivered - quantities.returned);
-      const status = bill.status === 'Not supplied' && remaining > 0
-        ? 'Not supplied'
-        : getBillStatus(quantities);
+      const isCancelled = bill.status === 'Cancelled';
+      const remaining = isCancelled ? 0 : Math.max(0, quantities.ordered - quantities.delivered - quantities.returned);
+      const status = isCancelled
+        ? 'Cancelled'
+        : bill.status === 'Not supplied' && remaining > 0
+          ? 'Not supplied'
+          : getBillStatus(quantities);
       const returnReasons = [...new Set(items
         .filter(item => Number(item.qty_returned) > 0 && item.return_type)
         .map(item => item.return_type))].join(', ');
 
-      orderedUnits += quantities.ordered;
+      if (isCancelled) cancelledBills += 1;
+      else orderedUnits += quantities.ordered;
       deliveredUnits += quantities.delivered;
       returnedUnits += quantities.returned;
       pendingUnits += remaining;
@@ -2789,7 +2794,7 @@ app.get('/api/bills/export', async (req, res) => {
           delivered,
           returned,
           returned > 0 ? item.return_type : '',
-          Math.max(0, ordered - delivered - returned),
+          status === 'Cancelled' ? 0 : Math.max(0, ordered - delivered - returned),
           status
         ]);
       }
@@ -2799,6 +2804,7 @@ app.get('/api/bills/export', async (req, res) => {
       ['Total Bills', bills.length],
       ['Bills With Pending Items', billsWithPendingItems],
       ['Completed Or Returned Bills', completedBills],
+      ['Cancelled Bills', cancelledBills],
       ['Total Units Ordered', orderedUnits],
       ['Total Units Delivered', deliveredUnits],
       ['Total Units Returned', returnedUnits],
@@ -2848,6 +2854,47 @@ app.get('/api/bills', async (req, res) => {
   }
 });
 
+app.post('/api/bills/cancel', async (req, res) => {
+  if (!['admin', 'manager'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Only an administrator or manager can cancel or restore an order.' });
+  }
+  const billId = Number(req.body?.billId);
+  if (!Number.isSafeInteger(billId) || billId < 1 || typeof req.body?.cancelled !== 'boolean') {
+    return res.status(400).json({ error: 'Choose a valid delivery.' });
+  }
+
+  const db = req.app.locals.db;
+  try {
+    const bill = await db.get('SELECT id, status FROM bills WHERE id = ? AND company_id = ?', [billId, req.user.companyId]);
+    if (!bill) return res.status(404).json({ error: 'Delivery not found.' });
+
+    if (req.body.cancelled) {
+      await db.run(
+        `UPDATE bills SET status = 'Cancelled', not_supplied_from_date = NULL,
+           updated_at = CURRENT_TIMESTAMP, progress_updated_at = ?
+         WHERE id = ? AND company_id = ?`,
+        [new Date().toISOString(), billId, req.user.companyId]
+      );
+      return res.json({ message: 'Order marked as cancelled.', status: 'Cancelled' });
+    }
+
+    if (bill.status !== 'Cancelled') return res.json({ message: 'Order is not cancelled.', status: bill.status });
+    const totals = await db.get(
+      'SELECT SUM(qty_ordered) AS ordered, SUM(qty_delivered) AS delivered, SUM(qty_returned) AS returned FROM bill_items WHERE bill_id = ?',
+      [billId]
+    );
+    const status = getBillStatus(totals);
+    await db.run(
+      'UPDATE bills SET status = ?, updated_at = CURRENT_TIMESTAMP, progress_updated_at = ? WHERE id = ? AND company_id = ?',
+      [status, new Date().toISOString(), billId, req.user.companyId]
+    );
+    res.json({ message: 'Order restored.', status });
+  } catch (error) {
+    console.error('Could not update cancelled status:', error);
+    res.status(500).json({ error: 'Could not update the order. Please try again.' });
+  }
+});
+
 app.post('/api/bills/not-supplied', async (req, res) => {
   if (req.user.role === 'manager') {
     return res.status(403).json({ error: 'Only the assigned delivery partner or an administrator can mark a bill not supplied.' });
@@ -2866,17 +2913,22 @@ app.post('/api/bills/not-supplied', async (req, res) => {
     transactionOpen = true;
     const bill = req.user.role === 'delivery_partner'
       ? await db.get(
-        'SELECT id, delivery_date, created_at FROM bills WHERE id = ? AND company_id = ? AND assigned_to = ?',
+        'SELECT id, delivery_date, created_at, status FROM bills WHERE id = ? AND company_id = ? AND assigned_to = ?',
         [billId, req.user.companyId, req.user.id]
       )
       : await db.get(
-        'SELECT id, delivery_date, created_at FROM bills WHERE id = ? AND company_id = ?',
+        'SELECT id, delivery_date, created_at, status FROM bills WHERE id = ? AND company_id = ?',
         [billId, req.user.companyId]
       );
     if (!bill) {
       await db.exec('ROLLBACK');
       transactionOpen = false;
       return res.status(404).json({ error: 'Delivery not found.' });
+    }
+    if (bill.status === 'Cancelled') {
+      await db.exec('ROLLBACK');
+      transactionOpen = false;
+      return res.status(400).json({ error: 'This order is cancelled. Restore it before changing its delivery status.' });
     }
 
     const billDate = bill.delivery_date || String(bill.created_at || '').slice(0, 10);
@@ -2941,16 +2993,20 @@ app.post('/api/bills/reconcile', async (req, res) => {
     }
     const bill = req.user.role === 'delivery_partner'
       ? await db.get(
-        'SELECT id, not_supplied_from_date FROM bills WHERE id = ? AND company_id = ? AND assigned_to = ?',
+        'SELECT id, status, not_supplied_from_date FROM bills WHERE id = ? AND company_id = ? AND assigned_to = ?',
         [Number(billId), req.user.companyId, req.user.id]
       )
       : await db.get(
-        'SELECT id, not_supplied_from_date FROM bills WHERE id = ? AND company_id = ?',
+        'SELECT id, status, not_supplied_from_date FROM bills WHERE id = ? AND company_id = ?',
         [Number(billId), req.user.companyId]
       );
     if (!bill) {
       await db.exec('ROLLBACK');
       return res.status(404).json({ error: 'Delivery not found.' });
+    }
+    if (bill.status === 'Cancelled') {
+      await db.exec('ROLLBACK');
+      return res.status(400).json({ error: 'This order is cancelled. A manager or administrator must restore it before progress can be updated.' });
     }
 
     for (const item of items) {
