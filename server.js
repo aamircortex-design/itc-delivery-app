@@ -2466,6 +2466,135 @@ app.get('/api/profitability/rfa-report', async (req, res) => {
 const K4_STANDARD_RATE = 0.015;
 const K4_SX_RATE = 0.02;
 
+function k4WorkingDaysInMonth(year, monthIndex) {
+  const days = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+  let working = 0;
+  for (let day = 1; day <= days; day += 1) {
+    if (new Date(Date.UTC(year, monthIndex, day)).getUTCDay() !== 0) working += 1;
+  }
+  return working;
+}
+
+async function computeK4Costs(db, companyId, fromDate, toDate) {
+  const settings = await db.all(
+    'SELECT * FROM k4_staff_settings WHERE company_id = ? ORDER BY effective_from',
+    [companyId]
+  );
+  const expenses = await db.all(
+    'SELECT * FROM k4_daily_expenses WHERE company_id = ? AND expense_date BETWEEN ? AND ?',
+    [companyId, fromDate, toDate]
+  );
+  let deliveryBoyCost = 0;
+  let packerCost = 0;
+  let workingDays = 0;
+  const start = new Date(`${fromDate}T00:00:00Z`);
+  const end = new Date(`${toDate}T00:00:00Z`);
+  for (let day = start; day <= end; day = new Date(day.getTime() + 86400000)) {
+    if (day.getUTCDay() === 0) continue;
+    workingDays += 1;
+    const dateKey = day.toISOString().slice(0, 10);
+    let setting = null;
+    for (const candidate of settings) {
+      if (candidate.effective_from <= dateKey) setting = candidate;
+      else break;
+    }
+    if (!setting) continue;
+    const monthDays = k4WorkingDaysInMonth(day.getUTCFullYear(), day.getUTCMonth());
+    deliveryBoyCost += Number(setting.delivery_boy_salary) / monthDays;
+    packerCost += Number(setting.packer_salary) / monthDays;
+  }
+  const additionalExpense = expenses.reduce((sum, row) => sum + Number(row.additional_expense), 0);
+  const vehiclesHired = expenses.reduce((sum, row) => sum + Number(row.vehicles_hired), 0);
+  const vehicleAmount = expenses.reduce((sum, row) => sum + Number(row.vehicle_amount), 0);
+  return {
+    workingDays,
+    deliveryBoyCost,
+    packerCost,
+    additionalExpense,
+    vehiclesHired,
+    vehicleAmount,
+    totalSpent: deliveryBoyCost + packerCost + additionalExpense + vehicleAmount
+  };
+}
+
+function parseK4Amount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 && number <= 100000000 ? number : null;
+}
+
+function parseK4Count(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 && number <= 10000 ? number : null;
+}
+
+app.get('/api/profitability/k4-settings', async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Administrator access is required.' });
+  const today = normalizeDeliveryDate(req.query.date) || new Date().toISOString().slice(0, 10);
+  const history = await req.app.locals.db.all(
+    `SELECT effective_from AS effectiveFrom, delivery_boy_count AS deliveryBoyCount, delivery_boy_salary AS deliveryBoySalary,
+            packer_count AS packerCount, packer_salary AS packerSalary
+     FROM k4_staff_settings WHERE company_id = ? ORDER BY effective_from DESC`,
+    [req.user.companyId]
+  );
+  const current = history.find(row => row.effectiveFrom <= today) || history[history.length - 1] || null;
+  res.json({ current, history });
+});
+
+app.put('/api/profitability/k4-settings', async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Administrator access is required.' });
+  const effectiveFrom = normalizeDeliveryDate(req.body?.effectiveFrom);
+  const deliveryBoyCount = parseK4Count(req.body?.deliveryBoyCount);
+  const deliveryBoySalary = parseK4Amount(req.body?.deliveryBoySalary);
+  const packerCount = parseK4Count(req.body?.packerCount);
+  const packerSalary = parseK4Amount(req.body?.packerSalary);
+  if (!effectiveFrom || deliveryBoyCount === null || deliveryBoySalary === null || packerCount === null || packerSalary === null) {
+    return res.status(400).json({ error: 'Enter a valid date, staff counts and total salaries.' });
+  }
+  await req.app.locals.db.run(
+    `INSERT INTO k4_staff_settings (company_id, effective_from, delivery_boy_count, delivery_boy_salary, packer_count, packer_salary)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(company_id, effective_from) DO UPDATE SET
+       delivery_boy_count = excluded.delivery_boy_count, delivery_boy_salary = excluded.delivery_boy_salary,
+       packer_count = excluded.packer_count, packer_salary = excluded.packer_salary`,
+    [req.user.companyId, effectiveFrom, deliveryBoyCount, deliveryBoySalary, packerCount, packerSalary]
+  );
+  res.json({ message: `Staff costs saved from ${effectiveFrom}.` });
+});
+
+app.get('/api/profitability/k4-expenses/:date', async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Administrator access is required.' });
+  const date = normalizeDeliveryDate(req.params.date);
+  if (!date) return res.status(400).json({ error: 'Choose a valid date.' });
+  const row = await req.app.locals.db.get(
+    'SELECT additional_expense, vehicles_hired, vehicle_amount FROM k4_daily_expenses WHERE company_id = ? AND expense_date = ?',
+    [req.user.companyId, date]
+  );
+  res.json({
+    additionalExpense: Number(row?.additional_expense || 0),
+    vehiclesHired: Number(row?.vehicles_hired || 0),
+    vehicleAmount: Number(row?.vehicle_amount || 0)
+  });
+});
+
+app.put('/api/profitability/k4-expenses/:date', async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Administrator access is required.' });
+  const date = normalizeDeliveryDate(req.params.date);
+  const additionalExpense = parseK4Amount(req.body?.additionalExpense);
+  const vehiclesHired = parseK4Count(req.body?.vehiclesHired);
+  const vehicleAmount = parseK4Amount(req.body?.vehicleAmount);
+  if (!date || additionalExpense === null || vehiclesHired === null || vehicleAmount === null) {
+    return res.status(400).json({ error: 'Enter a valid date, expense, vehicle count and vehicle amount.' });
+  }
+  await req.app.locals.db.run(
+    `INSERT INTO k4_daily_expenses (company_id, expense_date, additional_expense, vehicles_hired, vehicle_amount)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(company_id, expense_date) DO UPDATE SET
+       additional_expense = excluded.additional_expense, vehicles_hired = excluded.vehicles_hired, vehicle_amount = excluded.vehicle_amount`,
+    [req.user.companyId, date, additionalExpense, vehiclesHired, vehicleAmount]
+  );
+  res.json({ message: `Expenses saved for ${date}.` });
+});
+
 app.get('/api/profitability/k4-report', async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Administrator access is required to view the K4 report.' });
@@ -2477,6 +2606,10 @@ app.get('/api/profitability/k4-report', async (req, res) => {
   }
   if (fromDate > toDate) {
     return res.status(400).json({ error: 'The from date must be on or before the to date.' });
+  }
+
+  if ((new Date(`${toDate}T00:00:00Z`) - new Date(`${fromDate}T00:00:00Z`)) / 86400000 > 3660) {
+    return res.status(400).json({ error: 'Choose a date range of 10 years or less.' });
   }
 
   try {
@@ -2502,6 +2635,8 @@ app.get('/api/profitability/k4-report', async (req, res) => {
       totalReceivable: rows.reduce((total, row) => total + row.receivable, 0),
       rows
     };
+    report.costs = await computeK4Costs(req.app.locals.db, req.user.companyId, fromDate, toDate);
+    report.net = report.totalReceivable - report.costs.totalSpent;
     if (req.query.format === 'xlsx') {
       const workbook = createWorkbook([{
         name: 'K4 Delivery Receivable',
@@ -2511,11 +2646,17 @@ app.get('/api/profitability/k4-report', async (req, res) => {
           ['To Date', toDate],
           ['Total Net Sales', report.totalNetSales],
           ['Total Delivery Amount Receivable', report.totalReceivable],
+          ['Delivery Boy Salary', report.costs.deliveryBoyCost],
+          ['Packer Salary', report.costs.packerCost],
+          ['Additional Expense', report.costs.additionalExpense],
+          [`Vehicle Amount (${report.costs.vehiclesHired} vehicles)`, report.costs.vehicleAmount],
+          ['Total Spent', report.costs.totalSpent],
+          ['Net (Claimed - Spent)', report.net],
           [],
           ['Category', 'Net Sales', 'Rate %', 'Delivery Amount Receivable'],
           ...rows.map(row => [row.category, row.netSales, row.ratePercent, row.receivable])
         ],
-        autoFilterRow: 7
+        autoFilterRow: 13
       }]);
       return sendXlsx(res, workbook, `K4-Delivery-Receivable-${fromDate}-to-${toDate}.xlsx`);
     }

@@ -112,6 +112,23 @@ async function initDb() {
       assigned INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (company_id, assign_date, agent_key, sales_category, item_code, item_name)
     );
+    CREATE TABLE IF NOT EXISTS k4_staff_settings (
+      company_id INTEGER NOT NULL,
+      effective_from TEXT NOT NULL,
+      delivery_boy_count INTEGER NOT NULL DEFAULT 0,
+      delivery_boy_salary REAL NOT NULL DEFAULT 0,
+      packer_count INTEGER NOT NULL DEFAULT 0,
+      packer_salary REAL NOT NULL DEFAULT 0,
+      PRIMARY KEY (company_id, effective_from)
+    );
+    CREATE TABLE IF NOT EXISTS k4_daily_expenses (
+      company_id INTEGER NOT NULL,
+      expense_date TEXT NOT NULL,
+      additional_expense REAL NOT NULL DEFAULT 0,
+      vehicles_hired INTEGER NOT NULL DEFAULT 0,
+      vehicle_amount REAL NOT NULL DEFAULT 0,
+      PRIMARY KEY (company_id, expense_date)
+    );
     CREATE INDEX IF NOT EXISTS profitability_sales_period
       ON profitability_sales(company_id, sales_date);
     CREATE UNIQUE INDEX IF NOT EXISTS profitability_product_costs_by_code

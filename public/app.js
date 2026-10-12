@@ -757,21 +757,41 @@ function initializeK4Interface() {
   if (document.querySelector('#profitability-k4-report')) return;
   const today = getLocalDateValue();
   const panel = document.createElement('section');
-  panel.className = 'profitability-panel at-stock-report';
+  panel.className = 'profitability-panel at-stock-report k4-report';
   panel.id = 'profitability-k4-report';
   panel.hidden = true;
   panel.innerHTML = `
     <div class="at-stock-heading">
-      <div><h3>K4 delivery amount receivable</h3><p id="k4-report-date"></p></div>
+      <div><h3>K4 delivery cost</h3><p id="k4-report-date"></p></div>
       <div class="at-stock-actions"><button class="button button-secondary" id="export-k4-report" type="button">Export Excel</button></div>
     </div>
-    <div class="rfa-filters" style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0">
+    <div class="dialog-error" id="k4-report-error" role="alert" hidden></div>
+    <div class="k4-cards">
+      <form class="k4-card" id="k4-staff-form">
+        <h4>Staff salaries</h4>
+        <p class="at-stock-note">Total monthly salary is divided by the days in that month excluding Sundays. It stays the same every day until you change it.</p>
+        <label>Delivery boys <input type="number" min="0" step="1" id="k4-delivery-count" required></label>
+        <label>Delivery boys total salary (₹) <input type="number" min="0" step="0.01" id="k4-delivery-salary" required></label>
+        <label>Packers <input type="number" min="0" step="1" id="k4-packer-count" required></label>
+        <label>Packers total salary (₹) <input type="number" min="0" step="0.01" id="k4-packer-salary" required></label>
+        <label>Applies from <input type="date" id="k4-staff-from" value="${today}" required></label>
+        <button class="button button-primary" type="submit">Save salaries</button>
+        <p class="at-stock-save-status" id="k4-staff-status" role="status"></p>
+      </form>
+      <form class="k4-card" id="k4-expense-form">
+        <h4>Daily expenses</h4>
+        <label>Date <input type="date" id="k4-expense-date" value="${today}" required></label>
+        <label>Additional expense (₹) <input type="number" min="0" step="0.01" id="k4-additional-expense" value="0" required></label>
+        <label>Vehicles hired <input type="number" min="0" step="1" id="k4-vehicles-hired" value="0" required></label>
+        <label>Amount spent on vehicles (₹) <input type="number" min="0" step="0.01" id="k4-vehicle-amount" value="0" required></label>
+        <button class="button button-primary" type="submit">Save expenses</button>
+        <p class="at-stock-save-status" id="k4-expense-status" role="status"></p>
+      </form>
+    </div>
+    <div class="k4-filters">
       <label>From date <input type="date" id="k4-from-date" value="${today.slice(0, 7)}-01"></label>
       <label>To date <input type="date" id="k4-to-date" value="${today}"></label>
     </div>
-    <div class="dialog-error" id="k4-report-error" role="alert" hidden></div>
-    <p><strong>Total net sales:</strong> <span id="k4-total-sales">—</span></p>
-    <p><strong>Delivery amount receivable from company:</strong> <span id="k4-total-receivable">—</span></p>
     <div class="at-stock-table-wrap">
       <table class="at-stock-table">
         <thead><tr><th>Category</th><th>Net sales</th><th>Rate</th><th>Delivery amount receivable</th></tr></thead>
@@ -779,10 +799,19 @@ function initializeK4Interface() {
       </table>
     </div>
     <p class="at-stock-empty" id="k4-report-empty" hidden>No sales found for these dates. Upload sales registers on Profitability first.</p>
-    <p class="at-stock-note">Net sales come from the uploaded sales register. Delivery amount receivable is 1.5% of net sales, and 2% for the SX category.</p>`;
+    <p class="at-stock-note">Delivery amount receivable is 1.5% of net sales, and 2% for the SX category.</p>
+    <div class="at-stock-table-wrap">
+      <table class="at-stock-table" id="k4-summary-table">
+        <tbody id="k4-summary-rows"></tbody>
+      </table>
+    </div>
+    <div class="k4-result" id="k4-result" role="status"></div>`;
   document.querySelector('.profitability-controls').insertAdjacentElement('afterend', panel);
   document.querySelector('#k4-from-date').addEventListener('change', loadK4Report);
   document.querySelector('#k4-to-date').addEventListener('change', loadK4Report);
+  document.querySelector('#k4-expense-date').addEventListener('change', loadK4Expenses);
+  document.querySelector('#k4-staff-form').addEventListener('submit', saveK4Staff);
+  document.querySelector('#k4-expense-form').addEventListener('submit', saveK4Expenses);
   document.querySelector('#export-k4-report').addEventListener('click', () => {
     const fromDate = document.querySelector('#k4-from-date').value;
     const toDate = document.querySelector('#k4-to-date').value;
@@ -799,6 +828,71 @@ function initializeK4Interface() {
   });
 }
 
+async function loadK4Staff() {
+  const date = document.querySelector('#k4-staff-from').value || getLocalDateValue();
+  const { current } = await requestJson(`/api/profitability/k4-settings?date=${encodeURIComponent(date)}`);
+  document.querySelector('#k4-delivery-count').value = current?.deliveryBoyCount ?? 0;
+  document.querySelector('#k4-delivery-salary').value = current?.deliveryBoySalary ?? 0;
+  document.querySelector('#k4-packer-count').value = current?.packerCount ?? 0;
+  document.querySelector('#k4-packer-salary').value = current?.packerSalary ?? 0;
+}
+
+async function saveK4Staff(event) {
+  event.preventDefault();
+  const status = document.querySelector('#k4-staff-status');
+  status.classList.remove('error');
+  try {
+    const result = await requestJson('/api/profitability/k4-settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        effectiveFrom: document.querySelector('#k4-staff-from').value,
+        deliveryBoyCount: Number(document.querySelector('#k4-delivery-count').value),
+        deliveryBoySalary: Number(document.querySelector('#k4-delivery-salary').value),
+        packerCount: Number(document.querySelector('#k4-packer-count').value),
+        packerSalary: Number(document.querySelector('#k4-packer-salary').value)
+      })
+    });
+    status.textContent = result.message;
+    await loadK4Report();
+  } catch (error) {
+    status.textContent = error.message;
+    status.classList.add('error');
+  }
+}
+
+async function loadK4Expenses() {
+  const date = document.querySelector('#k4-expense-date').value;
+  if (!date) return;
+  const data = await requestJson(`/api/profitability/k4-expenses/${encodeURIComponent(date)}`);
+  document.querySelector('#k4-additional-expense').value = data.additionalExpense;
+  document.querySelector('#k4-vehicles-hired').value = data.vehiclesHired;
+  document.querySelector('#k4-vehicle-amount').value = data.vehicleAmount;
+}
+
+async function saveK4Expenses(event) {
+  event.preventDefault();
+  const status = document.querySelector('#k4-expense-status');
+  status.classList.remove('error');
+  try {
+    const date = document.querySelector('#k4-expense-date').value;
+    const result = await requestJson(`/api/profitability/k4-expenses/${encodeURIComponent(date)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        additionalExpense: Number(document.querySelector('#k4-additional-expense').value),
+        vehiclesHired: Number(document.querySelector('#k4-vehicles-hired').value),
+        vehicleAmount: Number(document.querySelector('#k4-vehicle-amount').value)
+      })
+    });
+    status.textContent = result.message;
+    await loadK4Report();
+  } catch (error) {
+    status.textContent = error.message;
+    status.classList.add('error');
+  }
+}
+
 async function loadK4Report() {
   const fromDate = document.querySelector('#k4-from-date').value;
   const toDate = document.querySelector('#k4-to-date').value;
@@ -813,8 +907,7 @@ async function loadK4Report() {
   }
   try {
     const report = await requestJson(`/api/profitability/k4-report?${new URLSearchParams({ fromDate, toDate })}`);
-    document.querySelector('#k4-total-sales').textContent = formatCurrency(report.totalNetSales);
-    document.querySelector('#k4-total-receivable').textContent = formatCurrency(report.totalReceivable);
+    const costs = report.costs;
     document.querySelector('#k4-report-date').textContent = `From ${formatDate(report.fromDate)} to ${formatDate(report.toDate)}`;
     document.querySelector('#k4-report-rows').innerHTML = report.rows.map(row => `<tr>
       <td data-label="Category">${escapeHtml(row.category)}</td>
@@ -823,10 +916,28 @@ async function loadK4Report() {
       <td data-label="Delivery amount receivable">${formatCurrency(row.receivable)}</td>
     </tr>`).join('');
     document.querySelector('#k4-report-empty').hidden = report.rows.length > 0;
+    const line = (label, value) => `<tr><th scope="row">${label}</th><td>${value}</td></tr>`;
+    document.querySelector('#k4-summary-rows').innerHTML = [
+      line('Total net sales', formatCurrency(report.totalNetSales)),
+      line('Delivery amount claimed from company', formatCurrency(report.totalReceivable)),
+      line(`Delivery boy salary (${costs.workingDays} working days)`, formatCurrency(costs.deliveryBoyCost)),
+      line(`Packer salary (${costs.workingDays} working days)`, formatCurrency(costs.packerCost)),
+      line('Additional expense', formatCurrency(costs.additionalExpense)),
+      line(`Vehicles hired (${costs.vehiclesHired})`, formatCurrency(costs.vehicleAmount)),
+      line('Total amount spent', formatCurrency(costs.totalSpent))
+    ].join('');
+    const result = document.querySelector('#k4-result');
+    const positive = report.net >= 0;
+    result.className = `k4-result ${positive ? 'k4-positive' : 'k4-negative'}`;
+    result.textContent = `${positive ? 'Positive' : 'Negative'} delivery cost: ${formatCurrency(Math.abs(report.net))} (claimed ${formatCurrency(report.totalReceivable)} − spent ${formatCurrency(costs.totalSpent)})`;
   } catch (error) {
     errorElement.textContent = error.message;
     errorElement.hidden = false;
   }
+}
+
+async function openK4Page() {
+  await Promise.all([loadK4Staff(), loadK4Expenses(), loadK4Report()]).catch(error => showToast(error.message, true));
 }
 
 function renderRfaReport(report) {
@@ -1875,7 +1986,7 @@ document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
       showProfitabilityTab('sku');
       loadProfitabilityReport();
     }
-    if (page === 'k4') loadK4Report();
+    if (page === 'k4') openK4Page();
     if (page === 'at-stock') loadAtStockReport();
     if (page === 'at-assignment') loadAtAssignmentReport();
     if (page === 'at-damages') loadAtDamages();
