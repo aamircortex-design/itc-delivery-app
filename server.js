@@ -1381,11 +1381,15 @@ async function getUploadLock(db, companyId) {
   const cutoff = new Date(Date.parse(`${today}T00:00:00Z`) - UPLOAD_LOCK_DAYS * 86400000).toISOString().slice(0, 10);
   const bills = await db.all(
     `SELECT bill_no AS billNo, outlet_name AS outletName, status,
-            COALESCE(NULLIF(delivery_date, ''), substr(created_at, 1, 10)) AS billDate
+            CASE WHEN status = 'Not supplied' AND NULLIF(not_supplied_from_date, '') IS NOT NULL
+                 THEN not_supplied_from_date
+                 ELSE COALESCE(NULLIF(delivery_date, ''), substr(created_at, 1, 10)) END AS billDate
      FROM bills
      WHERE company_id = ?
        AND status NOT IN ('Completed', 'Returned', 'Cancelled')
-       AND COALESCE(NULLIF(delivery_date, ''), substr(created_at, 1, 10)) < ?
+       AND (CASE WHEN status = 'Not supplied' AND NULLIF(not_supplied_from_date, '') IS NOT NULL
+                 THEN not_supplied_from_date
+                 ELSE COALESCE(NULLIF(delivery_date, ''), substr(created_at, 1, 10)) END) < ?
      ORDER BY billDate, bill_no`,
     [companyId, cutoff]
   );
