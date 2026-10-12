@@ -215,6 +215,19 @@
           </div>
 
           <div id="profitability-sku-report" role="tabpanel" aria-labelledby="profitability-sku-tab-button">
+          <section class="bill-tracker" id="bill-tracker" aria-label="Sales register bill tracker">
+            <div class="bill-tracker-head">
+              <h2>Bill number tracker</h2>
+              <form id="bill-tracker-form" class="bill-tracker-form">
+                <label>Track from bill no. <input id="bill-tracker-start" type="text" placeholder="I/26-27/010400" maxlength="60" required></label>
+                <button class="button button-secondary" type="submit">Set</button>
+              </form>
+            </div>
+            <div class="dialog-error" id="bill-tracker-error" role="alert" hidden></div>
+            <div class="bill-tracker-summary" id="bill-tracker-summary" role="status"></div>
+            <ul class="bill-tracker-list" id="bill-tracker-list"></ul>
+            <details class="bill-tracker-ignored" id="bill-tracker-ignored" hidden><summary>Ignored bill numbers</summary><ul class="bill-tracker-list" id="bill-tracker-ignored-list"></ul></details>
+          </section>
           <section class="profitability-import-grid" aria-label="Import report data">
             <article class="profitability-import-card">
               <div>

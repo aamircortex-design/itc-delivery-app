@@ -465,3 +465,17 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .k4-result { margin-top: 14px; padding: 14px 16px; border-radius: 8px; font-size: 15px; font-weight: 700; }
 .k4-positive { color: #1f6b43; background: #e8f6ee; }
 .k4-negative { color: #a33a3a; background: #fdeaea; }
+
+.bill-tracker { display: grid; gap: 10px; margin: 0 0 16px; padding: 14px; border: 1px solid #e7ebe8; border-radius: 8px; background: #fff; }
+.bill-tracker-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.bill-tracker-head h2 { margin: 0; font-size: 16px; }
+.bill-tracker-form { display: flex; align-items: end; gap: 8px; }
+.bill-tracker-form label { display: grid; gap: 4px; font-size: 12px; font-weight: 600; }
+.bill-tracker-form input { min-height: 34px; padding: 0 8px; border: 1px solid #d5ddd8; border-radius: 6px; }
+.bill-tracker-summary { padding: 10px 12px; border-radius: 6px; font-size: 13px; background: #f4f6f5; }
+.bill-tracker-ok { color: #1f6b43; background: #e8f6ee; font-weight: 600; }
+.bill-tracker-bad { color: #a33a3a; background: #fdeaea; font-weight: 600; }
+.bill-tracker-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; max-height: 220px; overflow: auto; }
+.bill-tracker-list li { display: inline-flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid #e7ebe8; border-radius: 6px; font-size: 12px; }
+.bill-tracker-list li span { color: #6b7a72; }
+.bill-tracker-list .button { min-height: 24px; padding: 0 8px; font-size: 11px; }

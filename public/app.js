@@ -1069,6 +1069,10 @@ async function uploadProfitabilityFile(file) {
       body: formData
     });
     status.textContent = result.message;
+    const tracker = await loadBillTracker();
+    if (tracker?.configured && tracker.missingCount > 0) {
+      status.textContent += `   bill number still missing — see the tracker above.`
+    }
     if (currentUser.role === 'admin') {
       await loadProfitabilityReport();
       await loadRfaReport();
@@ -1079,6 +1083,58 @@ async function uploadProfitabilityFile(file) {
   } finally {
     button.disabled = false;
     input.value = '';
+  }
+}
+
+function renderBillTracker(tracker) {
+  const summary = document.querySelector('#bill-tracker-summary');
+  const list = document.querySelector('#bill-tracker-list');
+  const ignoredBox = document.querySelector('#bill-tracker-ignored');
+  const ignoredList = document.querySelector('#bill-tracker-ignored-list');
+  if (!tracker.configured) {
+    summary.className = 'bill-tracker-summary';
+    summary.textContent = 'Enter the first bill number to track (for example I/26-27/010400). Every number after it, up to the latest uploaded bill, must be present or marked ignored.';
+    list.innerHTML = '';
+    ignoredBox.hidden = true;
+    return;
+  }
+  document.querySelector('#bill-tracker-start').value = tracker.startBill;
+  const ok = tracker.missingCount === 0;
+  summary.className = `bill-tracker-summary ${ok ? 'bill-tracker-ok' : 'bill-tracker-bad'}`;
+  summary.textContent = ok
+    ? `All bills are in sequence from ${tracker.startBill} to ${tracker.lastBill || tracker.startBill} (${tracker.importedCount} imported${tracker.ignoredCount ? `, ${tracker.ignoredCount} ignored` : ''}).`
+    : `${tracker.missingCount} bill number${tracker.missingCount === 1 ? '' : 's'} missing between ${tracker.startBill} and ${tracker.lastBill} (last bill imported ${formatDate(tracker.lastDate)}). Upload the missing bills or ignore a number that is not a sale.`;
+  list.innerHTML = tracker.missing.map(item => `<li><strong>${escapeHtml(item.billNo)}</strong>${item.afterDate ? `<span>after ${escapeHtml(formatDate(item.afterDate))}</span>` : ''}<button class="button button-secondary" type="button" data-ignore-bill="${escapeHtml(item.billNo)}" data-ignored="true">Ignore</button></li>`).join('');
+  ignoredBox.hidden = !tracker.ignoredList.length;
+  ignoredList.innerHTML = tracker.ignoredList.map(billNo => `<li><strong>${escapeHtml(billNo)}</strong><button class="button button-secondary" type="button" data-ignore-bill="${escapeHtml(billNo)}" data-ignored="false">Restore</button></li>`).join('');
+}
+
+async function loadBillTracker() {
+  const errorElement = document.querySelector('#bill-tracker-error');
+  errorElement.hidden = true;
+  try {
+    const tracker = await requestJson('/api/profitability/bill-tracker');
+    renderBillTracker(tracker);
+    return tracker;
+  } catch (error) {
+    errorElement.textContent = error.message;
+    errorElement.hidden = false;
+    return null;
+  }
+}
+
+async function updateBillTracker(path, method, body) {
+  const errorElement = document.querySelector('#bill-tracker-error');
+  errorElement.hidden = true;
+  try {
+    renderBillTracker(await requestJson(path, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }));
+  } catch (error) {
+    errorElement.textContent = error.message;
+    errorElement.hidden = false;
   }
 }
 
@@ -1990,11 +2046,21 @@ document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
       showProfitabilityTab('sku');
       loadProfitabilityReport();
     }
+    if (page === 'profitability') loadBillTracker();
     if (page === 'k4') openK4Page();
     if (page === 'at-stock') loadAtStockReport();
     if (page === 'at-assignment') loadAtAssignmentReport();
     if (page === 'at-damages') loadAtDamages();
   });
+});
+document.querySelector('#bill-tracker-form').addEventListener('submit', event => {
+  event.preventDefault();
+  updateBillTracker('/api/profitability/bill-tracker', 'PUT', { startBill: document.querySelector('#bill-tracker-start').value });
+});
+document.querySelector('#bill-tracker').addEventListener('click', event => {
+  const button = event.target.closest('[data-ignore-bill]');
+  if (!button) return;
+  updateBillTracker('/api/profitability/bill-tracker/ignore', 'POST', { billNo: button.dataset.ignoreBill, ignored: button.dataset.ignored === 'true' });
 });
 document.querySelector('#import-profit-sales').addEventListener('click', () => {
   document.querySelector('#profit-sales-file').click();

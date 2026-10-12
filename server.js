@@ -1257,6 +1257,99 @@ async function parseDeliveryRows(file) {
   return { rows, isSalesRegister, hasInvoiceDate };
 }
 
+function parseBillNumber(billNo) {
+  const match = /^(.*?)(\d+)$/.exec(String(billNo || '').trim());
+  return match ? { prefix: match[1], number: Number(match[2]), width: match[2].length } : null;
+}
+
+async function buildBillTracker(db, companyId) {
+  const setting = await db.get('SELECT start_bill FROM bill_tracker_settings WHERE company_id = ?', [companyId]);
+  const start = setting ? parseBillNumber(setting.start_bill) : null;
+  if (!start) return { configured: false };
+
+  const present = new Map();
+  const bills = await db.all(
+    'SELECT bill_no, MIN(sales_date) AS salesDate FROM profitability_sales WHERE company_id = ? AND bill_no LIKE ? GROUP BY bill_no',
+    [companyId, `${start.prefix.replace(/[%_]/g, '')}%`]
+  );
+  for (const bill of bills) {
+    const parsed = parseBillNumber(bill.bill_no);
+    if (parsed && parsed.prefix.toLowerCase() === start.prefix.toLowerCase() && parsed.number >= start.number) {
+      present.set(parsed.number, bill.salesDate);
+    }
+  }
+  const ignored = new Set((await db.all('SELECT bill_no FROM bill_tracker_ignored WHERE company_id = ?', [companyId]))
+    .map(row => String(row.bill_no).toLowerCase()));
+
+  const numbers = [...present.keys()].sort((a, b) => a - b);
+  const last = numbers.length ? numbers[numbers.length - 1] : start.number;
+  const format = number => `${start.prefix}${String(number).padStart(start.width, '0')}`;
+  const missing = [];
+  const ignoredList = [];
+  let lastDateSeen = '';
+  for (let number = start.number; number <= last && number - start.number <= 50000; number += 1) {
+    if (present.has(number)) {
+      lastDateSeen = present.get(number);
+      continue;
+    }
+    if (ignored.has(format(number).toLowerCase())) {
+      ignoredList.push(format(number));
+    } else {
+      missing.push({ billNo: format(number), afterDate: lastDateSeen });
+    }
+  }
+  return {
+    configured: true,
+    startBill: format(start.number),
+    lastBill: numbers.length ? format(last) : '',
+    lastDate: numbers.length ? present.get(last) : '',
+    importedCount: numbers.length,
+    ignoredCount: ignoredList.length,
+    ignoredList: ignoredList.slice(0, 500),
+    missingCount: missing.length,
+    missing: missing.slice(0, 500)
+  };
+}
+
+app.get('/api/profitability/bill-tracker', async (req, res) => {
+  if (!['admin', 'manager'].includes(req.user.role)) return res.status(403).json({ error: 'Access denied.' });
+  try {
+    res.json(await buildBillTracker(req.app.locals.db, req.user.companyId));
+  } catch (error) {
+    console.error('Bill tracker failed:', error);
+    res.status(500).json({ error: 'Could not check bill numbers.' });
+  }
+});
+
+app.put('/api/profitability/bill-tracker', async (req, res) => {
+  if (!['admin', 'manager'].includes(req.user.role)) return res.status(403).json({ error: 'Access denied.' });
+  const startBill = String(req.body?.startBill || '').trim();
+  if (!parseBillNumber(startBill) || startBill.length > 60) {
+    return res.status(400).json({ error: 'Enter the first bill number to track, for example I/26-27/010400.' });
+  }
+  const db = req.app.locals.db;
+  await db.run(
+    `INSERT INTO bill_tracker_settings (company_id, start_bill) VALUES (?, ?)
+     ON CONFLICT(company_id) DO UPDATE SET start_bill = excluded.start_bill`,
+    [req.user.companyId, startBill]
+  );
+  res.json(await buildBillTracker(db, req.user.companyId));
+});
+
+app.post('/api/profitability/bill-tracker/ignore', async (req, res) => {
+  if (!['admin', 'manager'].includes(req.user.role)) return res.status(403).json({ error: 'Access denied.' });
+  const billNo = String(req.body?.billNo || '').trim();
+  if (!parseBillNumber(billNo) || billNo.length > 60 || typeof req.body?.ignored !== 'boolean') {
+    return res.status(400).json({ error: 'Choose a valid bill number.' });
+  }
+  const db = req.app.locals.db;
+  if (req.body.ignored) {
+    await db.run('INSERT OR IGNORE INTO bill_tracker_ignored (company_id, bill_no) VALUES (?, ?)', [req.user.companyId, billNo]);
+  } else {
+    await db.run('DELETE FROM bill_tracker_ignored WHERE company_id = ? AND bill_no = ?', [req.user.companyId, billNo]);
+  }
+  res.json(await buildBillTracker(db, req.user.companyId));
+});
 app.post('/api/profitability/sales', upload.single('file'), async (req, res) => {
   if (!['admin', 'manager'].includes(req.user.role)) {
     return res.status(403).json({ error: 'Administrator or manager access is required to import the sales register.' });
