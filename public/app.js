@@ -344,6 +344,7 @@ async function loadCurrentUser() {
   document.querySelector('#user-management-link').hidden = user.role !== 'admin';
   document.querySelector('#profitability-link').hidden = user.role === 'delivery_partner';
   document.querySelector('#at-stock-link').hidden = !['admin', 'manager'].includes(user.role);
+  document.querySelector('#delivery-bill-tracker').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#k4-link').hidden = user.role !== 'admin';
   document.querySelector('#open-upload').hidden = user.role === 'delivery_partner';
   document.querySelector('#download-template').hidden = user.role === 'delivery_partner';
@@ -1086,11 +1087,16 @@ async function uploadProfitabilityFile(file) {
   }
 }
 
-function renderBillTracker(tracker) {
-  const summary = document.querySelector('#bill-tracker-summary');
-  const list = document.querySelector('#bill-tracker-list');
-  const ignoredBox = document.querySelector('#bill-tracker-ignored');
-  const ignoredList = document.querySelector('#bill-tracker-ignored-list');
+function billTrackerIds(source) {
+  return source === 'deliveries' ? 'delivery-bill-tracker' : 'bill-tracker';
+}
+
+function renderBillTracker(tracker, source = 'profitability') {
+  const id = billTrackerIds(source);
+  const summary = document.querySelector(`#${id}-summary`);
+  const list = document.querySelector(`#${id}-list`);
+  const ignoredBox = document.querySelector(`#${id}-ignored`);
+  const ignoredList = document.querySelector(`#${id}-ignored-list`);
   if (!tracker.configured) {
     summary.className = 'bill-tracker-summary';
     summary.textContent = 'Enter the first bill number to track (for example I/26-27/010400). Every number after it, up to the latest uploaded bill, must be present or marked ignored.';
@@ -1098,7 +1104,7 @@ function renderBillTracker(tracker) {
     ignoredBox.hidden = true;
     return;
   }
-  document.querySelector('#bill-tracker-start').value = tracker.startBill;
+  document.querySelector(`#${id}-start`).value = tracker.startBill;
   const ok = tracker.missingCount === 0;
   summary.className = `bill-tracker-summary ${ok ? 'bill-tracker-ok' : 'bill-tracker-bad'}`;
   summary.textContent = ok
@@ -1109,12 +1115,12 @@ function renderBillTracker(tracker) {
   ignoredList.innerHTML = tracker.ignoredList.map(billNo => `<li><strong>${escapeHtml(billNo)}</strong><button class="button button-secondary" type="button" data-ignore-bill="${escapeHtml(billNo)}" data-ignored="false">Restore</button></li>`).join('');
 }
 
-async function loadBillTracker() {
-  const errorElement = document.querySelector('#bill-tracker-error');
+async function loadBillTracker(source = 'profitability') {
+  const errorElement = document.querySelector(`#${billTrackerIds(source)}-error`);
   errorElement.hidden = true;
   try {
-    const tracker = await requestJson('/api/profitability/bill-tracker');
-    renderBillTracker(tracker);
+    const tracker = await requestJson(`/api/profitability/bill-tracker?source=${source}`);
+    renderBillTracker(tracker, source);
     return tracker;
   } catch (error) {
     errorElement.textContent = error.message;
@@ -1123,21 +1129,20 @@ async function loadBillTracker() {
   }
 }
 
-async function updateBillTracker(path, method, body) {
-  const errorElement = document.querySelector('#bill-tracker-error');
+async function updateBillTracker(path, method, body, source = 'profitability') {
+  const errorElement = document.querySelector(`#${billTrackerIds(source)}-error`);
   errorElement.hidden = true;
   try {
     renderBillTracker(await requestJson(path, {
       method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    }));
+      body: JSON.stringify({ ...body, source })
+    }), source);
   } catch (error) {
     errorElement.textContent = error.message;
     errorElement.hidden = false;
   }
 }
-
 async function uploadProfitabilityCostsFile(file) {
   if (!file) return;
   const input = document.querySelector('#profit-costs-file');
@@ -1487,6 +1492,7 @@ async function uploadFile() {
     const result = await requestJson('/api/bills/upload', { method: 'POST', body: formData });
     await loadDeliveries();
     uploadDialog.close();
+    const tracker = await loadBillTracker('deliveries');
     const skippedNotes = [];
     if (result.duplicateBillsSkipped) {
       skippedNotes.push(`${result.duplicateBillsSkipped} already-imported ${result.duplicateBillsSkipped === 1 ? 'bill was' : 'bills were'} skipped.`);
@@ -1501,6 +1507,9 @@ async function uploadFile() {
     const importSummary = duplicateUploadOnly
       ? `All ${result.duplicateBillsSkipped} bills were already imported for ${formatDate(result.deliveryDate)}. No duplicate bills added.`
       : `Imported ${result.billsImported} ${result.billsImported === 1 ? 'bill' : 'bills'} (${result.rowsImported} item lines) for ${formatDate(result.deliveryDate)}.`;
+    if (tracker?.configured && tracker.missingCount > 0) {
+      skippedNotes.push(` bill number${tracker.missingCount === 1 ? ' is' : 's are'} still missing — see the tracker.`);
+    }
     showToast([importSummary, ...skippedNotes].join(' '));
   } catch (error) {
     uploadError.textContent = error instanceof TypeError
@@ -2053,15 +2062,18 @@ document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
     if (page === 'at-damages') loadAtDamages();
   });
 });
-document.querySelector('#bill-tracker-form').addEventListener('submit', event => {
-  event.preventDefault();
-  updateBillTracker('/api/profitability/bill-tracker', 'PUT', { startBill: document.querySelector('#bill-tracker-start').value });
-});
-document.querySelector('#bill-tracker').addEventListener('click', event => {
-  const button = event.target.closest('[data-ignore-bill]');
-  if (!button) return;
-  updateBillTracker('/api/profitability/bill-tracker/ignore', 'POST', { billNo: button.dataset.ignoreBill, ignored: button.dataset.ignored === 'true' });
-});
+for (const source of ['profitability', 'deliveries']) {
+  const id = billTrackerIds(source);
+  document.querySelector(`#${id}-form`).addEventListener('submit', event => {
+    event.preventDefault();
+    updateBillTracker('/api/profitability/bill-tracker', 'PUT', { startBill: document.querySelector(`#${id}-start`).value }, source);
+  });
+  document.querySelector(`#${id}`).addEventListener('click', event => {
+    const button = event.target.closest('[data-ignore-bill]');
+    if (!button) return;
+    updateBillTracker('/api/profitability/bill-tracker/ignore', 'POST', { billNo: button.dataset.ignoreBill, ignored: button.dataset.ignored === 'true' }, source);
+  });
+}
 document.querySelector('#import-profit-sales').addEventListener('click', () => {
   document.querySelector('#profit-sales-file').click();
 });
@@ -2118,6 +2130,7 @@ async function initializeDashboard() {
   await loadCurrentUser();
   await loadDeliveryPartners();
   await loadDeliveries();
+  if (['admin', 'manager'].includes(currentUser.role)) loadBillTracker('deliveries');
   if (currentUser.role === 'admin') await loadProfitabilityReport();
   window.setInterval(refreshDashboard, 5000);
 }

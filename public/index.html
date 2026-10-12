@@ -127,6 +127,20 @@
             </article>
           </section>
 
+          <section class="bill-tracker" id="delivery-bill-tracker" aria-label="Delivery bill tracker" hidden>
+            <div class="bill-tracker-head">
+              <h2>Bill number tracker · deliveries</h2>
+              <form id="delivery-bill-tracker-form" class="bill-tracker-form">
+                <label>Track from bill no. <input id="delivery-bill-tracker-start" type="text" placeholder="I/26-27/010400" maxlength="60" required></label>
+                <button class="button button-secondary" type="submit">Set</button>
+              </form>
+            </div>
+            <div class="dialog-error" id="delivery-bill-tracker-error" role="alert" hidden></div>
+            <div class="bill-tracker-summary" id="delivery-bill-tracker-summary" role="status"></div>
+            <ul class="bill-tracker-list" id="delivery-bill-tracker-list"></ul>
+            <details class="bill-tracker-ignored" id="delivery-bill-tracker-ignored" hidden><summary>Ignored bill numbers</summary><ul class="bill-tracker-list" id="delivery-bill-tracker-ignored-list"></ul></details>
+          </section>
+
           <section class="deliveries-panel" id="deliveries">
             <div class="panel-heading">
               <div>

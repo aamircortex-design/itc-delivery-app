@@ -1262,14 +1262,32 @@ function parseBillNumber(billNo) {
   return match ? { prefix: match[1], number: Number(match[2]), width: match[2].length } : null;
 }
 
-async function buildBillTracker(db, companyId) {
-  const setting = await db.get('SELECT start_bill FROM bill_tracker_settings WHERE company_id = ?', [companyId]);
+const BILL_TRACKERS = {
+  profitability: {
+    settings: 'bill_tracker_settings',
+    ignored: 'bill_tracker_ignored',
+    billsSql: 'SELECT bill_no, MIN(sales_date) AS salesDate FROM profitability_sales WHERE company_id = ? AND bill_no LIKE ? GROUP BY bill_no'
+  },
+  deliveries: {
+    settings: 'delivery_bill_tracker_settings',
+    ignored: 'delivery_bill_tracker_ignored',
+    billsSql: "SELECT bill_no, MIN(COALESCE(NULLIF(delivery_date, ''), substr(created_at, 1, 10))) AS salesDate FROM bills WHERE company_id = ? AND bill_no LIKE ? GROUP BY bill_no"
+  }
+};
+
+function getBillTracker(source) {
+  return BILL_TRACKERS[source === 'deliveries' ? 'deliveries' : 'profitability'];
+}
+
+async function buildBillTracker(db, companyId, source) {
+  const tracker = getBillTracker(source);
+  const setting = await db.get(`SELECT start_bill FROM ${tracker.settings} WHERE company_id = ?`, [companyId]);
   const start = setting ? parseBillNumber(setting.start_bill) : null;
   if (!start) return { configured: false };
 
   const present = new Map();
   const bills = await db.all(
-    'SELECT bill_no, MIN(sales_date) AS salesDate FROM profitability_sales WHERE company_id = ? AND bill_no LIKE ? GROUP BY bill_no',
+    tracker.billsSql,
     [companyId, `${start.prefix.replace(/[%_]/g, '')}%`]
   );
   for (const bill of bills) {
@@ -1278,7 +1296,7 @@ async function buildBillTracker(db, companyId) {
       present.set(parsed.number, bill.salesDate);
     }
   }
-  const ignored = new Set((await db.all('SELECT bill_no FROM bill_tracker_ignored WHERE company_id = ?', [companyId]))
+  const ignored = new Set((await db.all(`SELECT bill_no FROM ${tracker.ignored} WHERE company_id = ?`, [companyId]))
     .map(row => String(row.bill_no).toLowerCase()));
 
   const numbers = [...present.keys()].sort((a, b) => a - b);
@@ -1314,7 +1332,7 @@ async function buildBillTracker(db, companyId) {
 app.get('/api/profitability/bill-tracker', async (req, res) => {
   if (!['admin', 'manager'].includes(req.user.role)) return res.status(403).json({ error: 'Access denied.' });
   try {
-    res.json(await buildBillTracker(req.app.locals.db, req.user.companyId));
+    res.json(await buildBillTracker(req.app.locals.db, req.user.companyId, req.query.source));
   } catch (error) {
     console.error('Bill tracker failed:', error);
     res.status(500).json({ error: 'Could not check bill numbers.' });
@@ -1328,12 +1346,13 @@ app.put('/api/profitability/bill-tracker', async (req, res) => {
     return res.status(400).json({ error: 'Enter the first bill number to track, for example I/26-27/010400.' });
   }
   const db = req.app.locals.db;
+  const tracker = getBillTracker(req.body?.source);
   await db.run(
-    `INSERT INTO bill_tracker_settings (company_id, start_bill) VALUES (?, ?)
+    `INSERT INTO ${tracker.settings} (company_id, start_bill) VALUES (?, ?)
      ON CONFLICT(company_id) DO UPDATE SET start_bill = excluded.start_bill`,
     [req.user.companyId, startBill]
   );
-  res.json(await buildBillTracker(db, req.user.companyId));
+  res.json(await buildBillTracker(db, req.user.companyId, req.body?.source));
 });
 
 app.post('/api/profitability/bill-tracker/ignore', async (req, res) => {
@@ -1343,12 +1362,13 @@ app.post('/api/profitability/bill-tracker/ignore', async (req, res) => {
     return res.status(400).json({ error: 'Choose a valid bill number.' });
   }
   const db = req.app.locals.db;
+  const tracker = getBillTracker(req.body?.source);
   if (req.body.ignored) {
-    await db.run('INSERT OR IGNORE INTO bill_tracker_ignored (company_id, bill_no) VALUES (?, ?)', [req.user.companyId, billNo]);
+    await db.run(`INSERT OR IGNORE INTO ${tracker.ignored} (company_id, bill_no) VALUES (?, ?)`, [req.user.companyId, billNo]);
   } else {
-    await db.run('DELETE FROM bill_tracker_ignored WHERE company_id = ? AND bill_no = ?', [req.user.companyId, billNo]);
+    await db.run(`DELETE FROM ${tracker.ignored} WHERE company_id = ? AND bill_no = ?`, [req.user.companyId, billNo]);
   }
-  res.json(await buildBillTracker(db, req.user.companyId));
+  res.json(await buildBillTracker(db, req.user.companyId, req.body?.source));
 });
 app.post('/api/profitability/sales', upload.single('file'), async (req, res) => {
   if (!['admin', 'manager'].includes(req.user.role)) {

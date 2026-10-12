@@ -121,6 +121,15 @@ async function initDb() {
       bill_no TEXT NOT NULL COLLATE NOCASE,
       PRIMARY KEY (company_id, bill_no)
     );
+    CREATE TABLE IF NOT EXISTS delivery_bill_tracker_settings (
+      company_id INTEGER PRIMARY KEY,
+      start_bill TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS delivery_bill_tracker_ignored (
+      company_id INTEGER NOT NULL,
+      bill_no TEXT NOT NULL COLLATE NOCASE,
+      PRIMARY KEY (company_id, bill_no)
+    );
     CREATE TABLE IF NOT EXISTS k4_staff_settings (
       company_id INTEGER NOT NULL,
       effective_from TEXT NOT NULL,

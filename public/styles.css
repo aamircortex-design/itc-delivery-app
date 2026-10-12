@@ -479,3 +479,4 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .bill-tracker-list li { display: inline-flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid #e7ebe8; border-radius: 6px; font-size: 12px; }
 .bill-tracker-list li span { color: #6b7a72; }
 .bill-tracker-list .button { min-height: 24px; padding: 0 8px; font-size: 11px; }
+.bill-tracker[hidden] { display: none; }
