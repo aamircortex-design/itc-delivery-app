@@ -1942,23 +1942,6 @@ app.get('/api/profitability/at-stock', async (req, res) => {
       [req.user.companyId, selectedDate]
     );
 
-    const removalRows = await req.app.locals.db.all(
-      `SELECT id, stock_date AS stockDate, UPPER(TRIM(sales_category)) AS category, TRIM(item_code) AS itemCode,
-              TRIM(item_name) AS itemName, qty, remarks, created_by AS createdBy
-       FROM at_stock_removals WHERE company_id = ? AND stock_date <= ? ORDER BY id`,
-      [req.user.companyId, selectedDate]
-    );
-    const removalsByProduct = new Map();
-    for (const removal of removalRows) {
-      const key = atProductKey(removal);
-      if (!removalsByProduct.has(key)) removalsByProduct.set(key, new Map());
-      const byDate = removalsByProduct.get(key);
-      if (!byDate.has(removal.stockDate)) byDate.set(removal.stockDate, { qty: 0, entries: [] });
-      const day = byDate.get(removal.stockDate);
-      day.qty += Number(removal.qty);
-      day.entries.push(removal);
-    }
-
     const getProductKey = atProductKey;
     const salesByProduct = new Map();
     for (const row of salesRows) {
@@ -2012,8 +1995,7 @@ app.get('/api/profitability/at-stock', async (req, res) => {
       const key = getProductKey(product);
       const sales = salesByProduct.get(key) || new Map();
       const stock = stockByProduct.get(key) || new Map();
-      const removals = removalsByProduct.get(key) || new Map();
-      const dates = [...new Set([...sales.keys(), ...stock.keys(), ...removals.keys(), selectedDate])]
+      const dates = [...new Set([...sales.keys(), ...stock.keys(), selectedDate])]
         .filter(date => date <= selectedDate)
         .sort();
       // Tracking starts on the first date the admin enters an opening balance.
@@ -2030,15 +2012,13 @@ app.get('/api/profitability/at-stock', async (req, res) => {
         const returnQty = Number(sale?.returnQty || 0) * unitWeight;
         const purchaseQty = Number(stockEntry?.purchaseQty || 0);
         const damagedQty = Number(stockEntry?.damagedQty || 0);
-        const removedQty = Number(removals.get(date)?.qty || 0);
-        onHand = opening + purchaseQty + returnQty - salesQty - damagedQty - removedQty;
+        onHand = opening + purchaseQty + returnQty - salesQty - damagedQty;
         if (date === selectedDate) {
           const unitForInput = product.category === 'AT' ? (getAtPackWeightKg(product.itemName) || 1) : 1;
           const rawMatches = hasOpening && stockEntry.openingBags !== null && stockEntry.openingBags !== undefined &&
             Math.abs(stockEntry.openingBags * 30 + stockEntry.openingPcs * unitForInput - opening) < 0.001;
           selectedDay = {
-            openingQty: opening, purchaseQty, damagedQty, removedQty, salesQty, returnQty, closingQty: onHand,
-            removals: (removals.get(date)?.entries || []).map(entry => ({ id: entry.id, quantity: Number(entry.qty), display: formatAtQuantity({ category: product.category, packWeightKg: product.category === 'AT' ? getAtPackWeightKg(product.itemName) : null }, Number(entry.qty)), remarks: entry.remarks, createdBy: entry.createdBy })),
+            openingQty: opening, purchaseQty, damagedQty, salesQty, returnQty, closingQty: onHand,
             tallied: Boolean(stockEntry?.tallied),
             openingInput: rawMatches ? { bags: stockEntry.openingBags, pcs: stockEntry.openingPcs } : null
           };
@@ -2058,14 +2038,12 @@ app.get('/api/profitability/at-stock', async (req, res) => {
       return sendXlsx(res, createWorkbook([{
         name: 'AT Stock',
         rows: [
-          ['Category', 'Product', 'Opening', 'Sales', 'Sales return', 'Purchase', 'Damaged', 'Removed', 'Removal remarks', 'Closing', 'Tallied'],
+          ['Category', 'Product', 'Opening', 'Sales', 'Sales return', 'Purchase', 'Damaged', 'Closing', 'Tallied'],
           ...rows.map(row => [
             row.category, row.displayName,
             formatAtQuantity(row, row.openingQty), formatAtQuantity(row, row.salesQty),
             formatAtQuantity(row, row.returnQty), formatAtQuantity(row, row.purchaseQty),
-            formatAtQuantity(row, row.damagedQty), formatAtQuantity(row, row.removedQty || 0),
-            (row.removals || []).map(entry => entry.remarks).filter(Boolean).join('; '),
-            formatAtQuantity(row, row.closingQty),
+            formatAtQuantity(row, row.damagedQty), formatAtQuantity(row, row.closingQty),
             row.tallied ? 'Yes' : 'No'
           ])
         ],
@@ -2078,6 +2056,55 @@ app.get('/api/profitability/at-stock', async (req, res) => {
     res.status(500).json({ error: 'Unable to load AT stock for this date.' });
   }
 });
+
+async function loadDamageWarehouse(db, companyId, toDate) {
+  const damaged = await db.all(
+    `SELECT UPPER(TRIM(sales_category)) AS category, TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName, SUM(damaged_qty) AS qty
+     FROM at_stock_daily WHERE company_id = ? AND stock_date <= ? AND damaged_qty > 0
+     GROUP BY UPPER(TRIM(sales_category)), TRIM(item_code), TRIM(item_name)`,
+    [companyId, toDate]
+  );
+  const removals = await db.all(
+    `SELECT id, stock_date AS date, UPPER(TRIM(sales_category)) AS category, TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName,
+            qty, remarks, created_by AS createdBy
+     FROM at_stock_removals WHERE company_id = ? AND stock_date <= ? ORDER BY stock_date DESC, id DESC`,
+    [companyId, toDate]
+  );
+  const products = new Map();
+  const entryFor = row => {
+    const product = canonicalAtProduct({ category: row.category, itemCode: row.itemCode, itemName: row.itemName });
+    const key = atProductKey(product);
+    if (!products.has(key)) {
+      const packWeightKg = product.category === 'AT' ? getAtPackWeightKg(product.itemName) : null;
+      products.set(key, {
+        category: product.category, itemCode: product.itemCode, itemName: product.itemName, packWeightKg,
+        displayName: product.category === 'AT' ? getAtDisplayName(product.itemName, packWeightKg) : product.itemName,
+        damagedQty: 0, removedQty: 0, removals: []
+      });
+    }
+    return products.get(key);
+  };
+  for (const row of damaged) {
+    const rawGramFlourInKg = row.category === 'AT' && canonicalAtProduct(row).category === 'BC';
+    entryFor(row).damagedQty += Number(row.qty) / (rawGramFlourInKg ? 0.2 : 1);
+  }
+  for (const row of removals) {
+    const entry = entryFor(row);
+    entry.removedQty += Number(row.qty);
+    entry.removals.push({ id: row.id, date: row.date, quantity: Number(row.qty), remarks: row.remarks, createdBy: row.createdBy });
+  }
+  return [...products.values()].map(entry => {
+    const format = quantity => formatAtQuantity(entry, quantity);
+    return {
+      ...entry,
+      balanceQty: Math.max(0, entry.damagedQty - entry.removedQty),
+      damagedDisplay: format(entry.damagedQty),
+      removedDisplay: format(entry.removedQty),
+      balanceDisplay: format(Math.max(0, entry.damagedQty - entry.removedQty)),
+      removals: entry.removals.map(removal => ({ ...removal, display: format(removal.quantity) }))
+    };
+  }).sort((a, b) => a.category.localeCompare(b.category) || a.displayName.localeCompare(b.displayName));
+}
 
 app.post('/api/profitability/at-stock/removals', async (req, res) => {
   if (req.user.role !== 'admin') {
@@ -2097,8 +2124,13 @@ app.post('/api/profitability/at-stock/removals', async (req, res) => {
   if (product.category === 'AT' && !getAtPackWeightKg(product.itemName)) {
     return res.status(400).json({ error: 'This product needs a pack size in its name before stock can be removed.' });
   }
-  try {
-    await req.app.locals.db.run(
+  try {
+    const warehouse = await loadDamageWarehouse(req.app.locals.db, req.user.companyId, selectedDate);
+    const match = warehouse.find(entry => atProductKey(entry) === atProductKey(product));
+    if (!match || quantity > match.balanceQty + 0.0001) {
+      return res.status(400).json({ error: `Only ${match ? match.balanceDisplay : '0'} is available in the damaged warehouse for this product.` });
+    }
+    await req.app.locals.db.run(
       `INSERT INTO at_stock_removals (company_id, stock_date, sales_category, item_code, item_name, qty, remarks, created_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [req.user.companyId, selectedDate, product.category, product.itemCode, product.itemName, quantity, remarks, req.user.fullName || req.user.username || '']
@@ -2371,6 +2403,7 @@ app.get('/api/profitability/damages', async (req, res) => {
         display: formatAtQuantity(item, Number(row.damagedQty))
       };
     });
+    const warehouse = await loadDamageWarehouse(req.app.locals.db, req.user.companyId, toDate);
     if (req.query.format === 'xlsx') {
       return sendXlsx(res, createWorkbook([{
         name: 'Damages',
@@ -2379,9 +2412,18 @@ app.get('/api/profitability/damages', async (req, res) => {
           ...entries.map(entry => [entry.date, entry.category, entry.displayName, entry.display])
         ],
         autoFilterRow: 1
+      }, {
+        name: 'Damaged warehouse',
+        rows: [
+          ['Category', 'Product', 'Total damaged', 'Removed', 'Balance', 'Removal date', 'Removed quantity', 'Remarks', 'Removed by'],
+          ...warehouse.flatMap(item => item.removals.length
+            ? item.removals.map(removal => [item.category, item.displayName, item.damagedDisplay, item.removedDisplay, item.balanceDisplay, removal.date, removal.display, removal.remarks, removal.createdBy])
+            : [[item.category, item.displayName, item.damagedDisplay, item.removedDisplay, item.balanceDisplay, '', '', '', '']])
+        ],
+        autoFilterRow: 1
       }]), `Damages-${fromDate}-to-${toDate}.xlsx`);
     }
-    res.json({ fromDate, toDate, entries });
+    res.json({ fromDate, toDate, entries, warehouse });
   } catch (error) {
     console.error('Damages report failed:', error);
     res.status(500).json({ error: 'Unable to load damaged stock.' });

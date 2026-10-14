@@ -433,7 +433,7 @@ function initializeAtStockInterface() {
     <div class="dialog-error" id="at-stock-error" role="alert" hidden></div>
     <div class="at-stock-table-wrap">
       <table class="at-stock-table">
-        <thead><tr><th>Category</th><th>Product</th><th>Opening</th><th>Sales</th><th>Sales return</th><th>Purchase</th><th>Damaged</th><th>Removed</th><th>Closing</th><th>Tallied</th></tr></thead>
+        <thead><tr><th>Category</th><th>Product</th><th>Opening</th><th>Sales</th><th>Sales return</th><th>Purchase</th><th>Damaged</th><th>Closing</th><th>Tallied</th></tr></thead>
         <tbody id="at-stock-rows"></tbody>
       </table>
     </div>
@@ -460,7 +460,6 @@ function initializeAtStockInterface() {
   controls.insertAdjacentElement('afterend', panel);
   document.querySelector('#save-at-stock').addEventListener('click', saveAtStock);
   document.querySelector('#at-stock-rows').addEventListener('click', toggleAtTallied);
-  document.querySelector('#at-stock-rows').addEventListener('click', handleAtRemovalClick);
   panel.addEventListener('click', event => { if (event.target.closest('[data-assignment-toggle]')) toggleAtAssignment(event); });
 
   const assignment = document.createElement('section');
@@ -507,7 +506,18 @@ function initializeAtStockInterface() {
         <tbody id="at-damages-rows"></tbody>
       </table>
     </div>
-    <p class="at-stock-empty" id="at-damages-empty" hidden>No damaged stock was recorded in this period.</p>`;
+    <p class="at-stock-empty" id="at-damages-empty" hidden>No damaged stock was recorded in this period.</p>
+    <div class="at-stock-heading at-warehouse-heading">
+      <div><h3>Damaged warehouse</h3><p>Total damaged stock up to the "To" date, less stock removed from the warehouse.</p></div>
+    </div>
+    <div class="at-stock-table-wrap">
+      <table class="at-stock-table">
+        <thead><tr><th>Category</th><th>Product</th><th>Total damaged</th><th>Removed</th><th>Balance</th><th>Removal details</th><th>Action</th></tr></thead>
+        <tbody id="at-warehouse-rows"></tbody>
+      </table>
+    </div>
+    <p class="at-stock-empty" id="at-warehouse-empty" hidden>The damaged warehouse is empty.</p>`;
+  damages.addEventListener('click', handleAtRemovalClick);
   assignment.insertAdjacentElement('afterend', damages);
   document.querySelector('#at-damages-from').addEventListener('change', loadAtDamages);
   document.querySelector('#at-damages-to').addEventListener('change', loadAtDamages);
@@ -534,9 +544,103 @@ async function loadAtDamages() {
       <td data-label="Product" title="${escapeHtml(entry.itemName)}">${escapeHtml(entry.displayName)}</td>
       <td data-label="Damaged quantity">${entry.display ? escapeHtml(entry.display) : `${formatStockNumber(entry.quantity)} kg`}</td>
     </tr>`).join('');
+    const isAdmin = currentUser?.role === 'admin';
+    document.querySelector('#at-warehouse-empty').hidden = report.warehouse.length > 0;
+    document.querySelector('#at-warehouse-rows').innerHTML = report.warehouse.map(item => `<tr data-stock-category="${escapeHtml(item.category)}"
+      data-stock-code="${escapeHtml(item.itemCode)}" data-stock-name="${escapeHtml(item.itemName)}"
+      data-stock-pack-weight="${item.packWeightKg || ''}" data-balance="${escapeHtml(item.balanceDisplay)}">
+      <td data-label="Category">${escapeHtml(item.category)}</td>
+      <td data-label="Product" title="${escapeHtml(item.itemName)}">${escapeHtml(item.displayName)}</td>
+      <td data-label="Total damaged">${escapeHtml(item.damagedDisplay)}</td>
+      <td data-label="Removed">${escapeHtml(item.removedDisplay)}</td>
+      <td data-label="Balance"><strong>${escapeHtml(item.balanceDisplay)}</strong></td>
+      <td data-label="Removal details">${item.removals.length ? `<ul class="at-removal-list">${item.removals.map(removal => `<li><span>${formatDate(removal.date)}: ${escapeHtml(removal.display)}${removal.remarks ? ` — ${escapeHtml(removal.remarks)}` : ''}</span>${isAdmin ? `<button class="at-removal-undo" type="button" data-removal-undo="${Number(removal.id)}" title="Undo this removal" aria-label="Undo this removal">✕</button>` : ''}</li>`).join('')}</ul>` : '—'}</td>
+      <td data-label="Action">${isAdmin && item.balanceQty > 0 ? '<button class="button button-secondary at-removal-button" type="button" data-removal-open>Remove stock</button>' : ''}</td>
+    </tr>`).join('');
   } catch (error) {
     errorElement.textContent = error.message;
     errorElement.hidden = false;
+  }
+}
+
+function openAtRemovalDialog(tr) {
+  const category = tr.dataset.stockCategory;
+  let dialog = document.querySelector('#at-removal-dialog');
+  if (!dialog) {
+    dialog = document.createElement('dialog');
+    dialog.className = 'modal';
+    dialog.id = 'at-removal-dialog';
+    dialog.innerHTML = `<form method="dialog" class="dialog-close-form"><button class="dialog-close" aria-label="Close" value="cancel" type="submit">×</button></form>
+      <h2>Remove damaged stock from warehouse</h2>
+      <p id="at-removal-product"></p>
+      <form id="at-removal-form" class="at-removal-form">
+        <div id="at-removal-fields"></div>
+        <label>Remarks (optional)<textarea id="at-removal-remarks" maxlength="500" rows="3"></textarea></label>
+        <div class="dialog-error" id="at-removal-error" role="alert" hidden></div>
+        <button class="button button-primary" type="submit">Remove stock</button>
+      </form>`;
+    document.body.append(dialog);
+    dialog.querySelector('#at-removal-form').addEventListener('submit', submitAtRemoval);
+  }
+  dialog.dataset.category = category;
+  dialog.dataset.code = tr.dataset.stockCode;
+  dialog.dataset.name = tr.dataset.stockName;
+  dialog.dataset.weight = category === 'AT' ? tr.dataset.stockPackWeight : '';
+  dialog.querySelector('#at-removal-product').textContent = `${tr.querySelector('[data-label="Product"]').textContent} · available: ${tr.dataset.balance}`;
+  dialog.querySelector('#at-removal-fields').innerHTML = category === 'AT'
+    ? '<label>Bags (30 kg) <input type="number" id="at-removal-bags" min="0" step="any" value="0"></label><label>Pieces <input type="number" id="at-removal-pcs" min="0" step="any" value="0"></label>'
+    : '<label>Pieces <input type="number" id="at-removal-pcs" min="0" step="any" value="0"></label>';
+  dialog.querySelector('#at-removal-remarks').value = '';
+  dialog.querySelector('#at-removal-error').hidden = true;
+  dialog.showModal();
+}
+
+async function submitAtRemoval(event) {
+  event.preventDefault();
+  const dialog = document.querySelector('#at-removal-dialog');
+  const errorElement = dialog.querySelector('#at-removal-error');
+  const pcs = Number(dialog.querySelector('#at-removal-pcs').value || 0);
+  const bagsInput = dialog.querySelector('#at-removal-bags');
+  const quantity = dialog.dataset.category === 'AT'
+    ? Number(bagsInput.value || 0) * 30 + pcs * Number(dialog.dataset.weight)
+    : pcs;
+  if (!(quantity > 0)) {
+    errorElement.textContent = 'Enter a quantity greater than zero.';
+    errorElement.hidden = false;
+    return;
+  }
+  try {
+    const result = await requestJson('/api/profitability/at-stock/removals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        date: document.querySelector('#at-damages-to').value,
+        category: dialog.dataset.category,
+        itemCode: dialog.dataset.code,
+        itemName: dialog.dataset.name,
+        quantity,
+        remarks: dialog.querySelector('#at-removal-remarks').value
+      })
+    });
+    dialog.close();
+    showToast(result.message);
+    await loadAtDamages();
+  } catch (error) {
+    errorElement.textContent = error.message;
+    errorElement.hidden = false;
+  }
+}
+
+async function handleAtRemovalClick(event) {
+  const open = event.target.closest('[data-removal-open]');
+  if (open) return openAtRemovalDialog(open.closest('tr'));
+  const undo = event.target.closest('[data-removal-undo]');
+  if (!undo || !confirm('Undo this stock removal?')) return;
+  try {
+    await requestJson(`/api/profitability/at-stock/removals/${encodeURIComponent(undo.dataset.removalUndo)}`, { method: 'DELETE' });
+    await loadAtDamages();
+  } catch (error) {
+    showToast(error.message);
   }
 }
 
@@ -666,98 +770,6 @@ function renderStockEntryInputs(row, field, baseQuantity, editable, rawCount = n
   </div>`;
 }
 
-function renderAtRemovalCell(row) {
-  const isAdmin = currentUser?.role === 'admin';
-  const entries = (row.removals || []).map(entry => `<li><span>${escapeHtml(entry.display)}${entry.remarks ? ` — ${escapeHtml(entry.remarks)}` : ''}</span>${isAdmin ? `<button class="at-removal-undo" type="button" data-removal-undo="${Number(entry.id)}" title="Undo this removal" aria-label="Undo this removal">✕</button>` : ''}</li>`).join('');
-  return `${entries ? `<ul class="at-removal-list">${entries}</ul>` : ''}${isAdmin ? '<button class="button button-secondary at-removal-button" type="button" data-removal-open>Remove stock</button>' : (entries ? '' : '—')}`;
-}
-
-function openAtRemovalDialog(tr) {
-  const category = tr.dataset.stockCategory;
-  const weight = Number(tr.dataset.stockPackWeight);
-  if (category === 'AT' && !(weight > 0)) {
-    showToast('This product needs a pack size in its name before stock can be removed.');
-    return;
-  }
-  let dialog = document.querySelector('#at-removal-dialog');
-  if (!dialog) {
-    dialog = document.createElement('dialog');
-    dialog.className = 'modal';
-    dialog.id = 'at-removal-dialog';
-    dialog.innerHTML = `<form method="dialog" class="dialog-close-form"><button class="dialog-close" aria-label="Close" value="cancel" type="submit">×</button></form>
-      <h2>Remove stock from warehouse</h2>
-      <p id="at-removal-product"></p>
-      <form id="at-removal-form" class="at-removal-form">
-        <div id="at-removal-fields"></div>
-        <label>Remarks (optional)<textarea id="at-removal-remarks" maxlength="500" rows="3"></textarea></label>
-        <div class="dialog-error" id="at-removal-error" role="alert" hidden></div>
-        <button class="button button-primary" type="submit">Remove stock</button>
-      </form>`;
-    document.body.append(dialog);
-    dialog.querySelector('#at-removal-form').addEventListener('submit', submitAtRemoval);
-  }
-  dialog.dataset.category = category;
-  dialog.dataset.code = tr.dataset.stockCode;
-  dialog.dataset.name = tr.dataset.stockName;
-  dialog.dataset.weight = category === 'AT' ? String(weight) : '';
-  dialog.querySelector('#at-removal-product').textContent = tr.querySelector('[data-label="Product"]').textContent;
-  dialog.querySelector('#at-removal-fields').innerHTML = category === 'AT'
-    ? '<label>Bags (30 kg) <input type="number" id="at-removal-bags" min="0" step="any" value="0"></label><label>Pieces <input type="number" id="at-removal-pcs" min="0" step="any" value="0"></label>'
-    : '<label>Pieces <input type="number" id="at-removal-pcs" min="0" step="any" value="0"></label>';
-  dialog.querySelector('#at-removal-remarks').value = '';
-  dialog.querySelector('#at-removal-error').hidden = true;
-  dialog.showModal();
-}
-
-async function submitAtRemoval(event) {
-  event.preventDefault();
-  const dialog = document.querySelector('#at-removal-dialog');
-  const errorElement = dialog.querySelector('#at-removal-error');
-  const pcs = Number(dialog.querySelector('#at-removal-pcs').value || 0);
-  const bagsInput = dialog.querySelector('#at-removal-bags');
-  const quantity = dialog.dataset.category === 'AT'
-    ? Number(bagsInput.value || 0) * 30 + pcs * Number(dialog.dataset.weight)
-    : pcs;
-  if (!(quantity > 0)) {
-    errorElement.textContent = 'Enter a quantity greater than zero.';
-    errorElement.hidden = false;
-    return;
-  }
-  try {
-    const result = await requestJson('/api/profitability/at-stock/removals', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        date: document.querySelector('#profit-date').value,
-        category: dialog.dataset.category,
-        itemCode: dialog.dataset.code,
-        itemName: dialog.dataset.name,
-        quantity,
-        remarks: dialog.querySelector('#at-removal-remarks').value
-      })
-    });
-    dialog.close();
-    showToast(result.message);
-    await loadAtStockReport();
-  } catch (error) {
-    errorElement.textContent = error.message;
-    errorElement.hidden = false;
-  }
-}
-
-async function handleAtRemovalClick(event) {
-  const open = event.target.closest('[data-removal-open]');
-  if (open) return openAtRemovalDialog(open.closest('tr'));
-  const undo = event.target.closest('[data-removal-undo]');
-  if (!undo || !confirm('Undo this stock removal?')) return;
-  try {
-    await requestJson(`/api/profitability/at-stock/removals/${encodeURIComponent(undo.dataset.removalUndo)}`, { method: 'DELETE' });
-    await loadAtStockReport();
-  } catch (error) {
-    showToast(error.message);
-  }
-}
-
 function renderAtStockReport(report) {
   const canEditOpening = currentUser?.role === 'admin';
   const canEditPurchases = ['admin', 'manager'].includes(currentUser?.role);
@@ -777,7 +789,6 @@ function renderAtStockReport(report) {
     <td data-label="Sales return">${row.category === 'AT' ? formatAtStockQuantity(row.returnQty, row.packWeightKg) : `${formatStockNumber(row.returnQty)} pcs`}</td>
     <td data-label="Purchase">${renderStockEntryInputs(row, 'purchase', row.purchaseQty, canEditRow)}</td>
     <td data-label="Damaged">${renderStockEntryInputs(row, 'damaged', row.damagedQty, canEditRow)}</td>
-    <td data-label="Removed">${renderAtRemovalCell(row)}</td>
     <td data-label="Closing">${row.category === 'AT' ? formatAtStockQuantity(row.closingQty, row.packWeightKg) : `${formatStockNumber(row.closingQty)} pcs`}</td>
     <td data-label="Tallied"><button class="button at-stock-assigned${row.tallied ? ' is-assigned' : ''}" type="button" data-stock-tallied="${row.tallied ? '1' : '0'}" aria-pressed="${row.tallied}" ${lockedForUser ? 'disabled title="Assigned and tallied. Only an administrator can change this."' : ''}>${row.tallied ? 'Tallied ✓' : 'Tallied'}</button></td>
   </tr>`;}).join('');
