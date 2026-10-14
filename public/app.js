@@ -460,6 +460,7 @@ function initializeAtStockInterface() {
   controls.insertAdjacentElement('afterend', panel);
   document.querySelector('#save-at-stock').addEventListener('click', saveAtStock);
   document.querySelector('#at-stock-rows').addEventListener('click', toggleAtTallied);
+  document.querySelector('#at-stock-rows').addEventListener('input', recalculateAtClosing);
   panel.addEventListener('click', event => { if (event.target.closest('[data-assignment-toggle]')) toggleAtAssignment(event); });
 
   const assignment = document.createElement('section');
@@ -770,6 +771,25 @@ function renderStockEntryInputs(row, field, baseQuantity, editable, rawCount = n
   </div>`;
 }
 
+function readStockRowQuantity(row, field) {
+  const readInput = selector => Number(row.querySelector(selector)?.value || 0);
+  if (row.dataset.stockCategory === 'AT') {
+    return readInput(`[data-stock-${field}-bags]`) * 30 + readInput(`[data-stock-${field}-pcs]`) * Number(row.dataset.stockPackWeight);
+  }
+  return readInput(`[data-stock-${field}-pcs]`);
+}
+
+function recalculateAtClosing(event) {
+  const row = event.target.closest('tr[data-stock-category]');
+  if (!row || !event.target.matches('input')) return;
+  const closing = readStockRowQuantity(row, 'opening') + readStockRowQuantity(row, 'purchase') + Number(row.dataset.returnQty) -
+    Number(row.dataset.salesQty) - readStockRowQuantity(row, 'damaged');
+  const cell = row.querySelector('[data-stock-closing]');
+  cell.textContent = row.dataset.stockCategory === 'AT'
+    ? formatAtStockQuantity(closing, Number(row.dataset.stockPackWeight))
+    : `${formatStockNumber(closing)} pcs`;
+}
+
 function renderAtStockReport(report) {
   const canEditOpening = currentUser?.role === 'admin';
   const canEditPurchases = ['admin', 'manager'].includes(currentUser?.role);
@@ -781,7 +801,7 @@ function renderAtStockReport(report) {
   const lockedForUser = row.locked && currentUser?.role !== 'admin';
   return `<tr data-stock-category="${escapeHtml(row.category)}"
     data-stock-code="${escapeHtml(row.itemCode)}" data-stock-name="${escapeHtml(row.itemName)}"
-    data-stock-pack-weight="${row.packWeightKg || ''}">
+    data-stock-pack-weight="${row.packWeightKg || ''}" data-sales-qty="${row.salesQty}" data-return-qty="${row.returnQty}">
     <td data-label="Category">${escapeHtml(row.category)}</td>
     <td data-label="Product" title="${escapeHtml(row.itemName)}">${escapeHtml(row.displayName || row.itemName)}</td>
     <td data-label="Opening">${renderStockEntryInputs(row, 'opening', row.openingQty, canEditOpening, row.openingInput ? { bags: row.openingInput.bags, loosePieces: row.openingInput.pcs } : null)}</td>
@@ -789,7 +809,7 @@ function renderAtStockReport(report) {
     <td data-label="Sales return">${row.category === 'AT' ? formatAtStockQuantity(row.returnQty, row.packWeightKg) : `${formatStockNumber(row.returnQty)} pcs`}</td>
     <td data-label="Purchase">${renderStockEntryInputs(row, 'purchase', row.purchaseQty, canEditRow)}</td>
     <td data-label="Damaged">${renderStockEntryInputs(row, 'damaged', row.damagedQty, canEditRow)}</td>
-    <td data-label="Closing">${row.category === 'AT' ? formatAtStockQuantity(row.closingQty, row.packWeightKg) : `${formatStockNumber(row.closingQty)} pcs`}</td>
+    <td data-label="Closing" data-stock-closing>${row.category === 'AT' ? formatAtStockQuantity(row.closingQty, row.packWeightKg) : `${formatStockNumber(row.closingQty)} pcs`}</td>
     <td data-label="Tallied"><button class="button at-stock-assigned${row.tallied ? ' is-assigned' : ''}" type="button" data-stock-tallied="${row.tallied ? '1' : '0'}" aria-pressed="${row.tallied}" ${lockedForUser ? 'disabled title="Assigned and tallied. Only an administrator can change this."' : ''}>${row.tallied ? 'Tallied ✓' : 'Tallied'}</button></td>
   </tr>`;}).join('');
   document.querySelector('#at-stock-rows').innerHTML = rows;
