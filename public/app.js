@@ -945,7 +945,7 @@ function initializeK4Interface() {
       </table>
     </div>
     <p class="at-stock-empty" id="k4-report-empty" hidden>No sales found for these dates. Upload sales registers on Profitability first.</p>
-    <p class="at-stock-note">Delivery amount receivable is 1.5% of net sales, and 2% for the SX category.</p>
+    <p class="at-stock-note">Delivery amount receivable is 1.5% of net sales, and 2% for the Bingo (SX) category.</p>
     <div class="at-stock-table-wrap">
       <table class="at-stock-table" id="k4-summary-table">
         <tbody id="k4-summary-rows"></tbody>

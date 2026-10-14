@@ -2898,7 +2898,7 @@ app.get('/api/profitability/k4-report', async (req, res) => {
       [req.user.companyId, fromDate, toDate]
     );
     const rows = sales.map(row => {
-      const isSx = /(^|[^A-Z])SX([^A-Z]|$)/i.test(row.category);
+      const isSx = /(^|[^A-Z])SX([^A-Z]|$)|BINGO/i.test(row.category);
       const rate = isSx ? K4_SX_RATE : K4_STANDARD_RATE;
       const netSales = Number(row.netSales) || 0;
       return { category: row.category, netSales, ratePercent: rate * 100, receivable: netSales * rate };
