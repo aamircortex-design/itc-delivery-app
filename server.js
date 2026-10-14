@@ -3221,25 +3221,26 @@ app.get('/api/bills/export', async (req, res) => {
         'SELECT * FROM bill_items WHERE bill_id = ? ORDER BY item_name',
         [bill.id]
       );
+      const isCancelled = bill.status === 'Cancelled';
+      // A cancelled bill's whole billed quantity comes back to us as a return.
       const quantities = items.reduce((totals, item) => {
         totals.ordered += Number(item.qty_ordered);
-        totals.delivered += Number(item.qty_delivered);
-        totals.returned += Number(item.qty_returned);
+        totals.delivered += isCancelled ? 0 : Number(item.qty_delivered);
+        totals.returned += isCancelled ? Number(item.qty_ordered) : Number(item.qty_returned);
         return totals;
       }, { ordered: 0, delivered: 0, returned: 0 });
-      const isCancelled = bill.status === 'Cancelled';
       const remaining = isCancelled ? 0 : Math.max(0, quantities.ordered - quantities.delivered - quantities.returned);
       const status = isCancelled
         ? 'Cancelled'
         : bill.status === 'Not supplied' && remaining > 0
           ? 'Not supplied'
           : getBillStatus(quantities);
-      const returnReasons = [...new Set(items
+      const returnReasons = isCancelled ? 'Bill cancelled' : [...new Set(items
         .filter(item => Number(item.qty_returned) > 0 && item.return_type)
         .map(item => item.return_type))].join(', ');
 
       if (isCancelled) cancelledBills += 1;
-      else orderedUnits += quantities.ordered;
+      orderedUnits += quantities.ordered;
       deliveredUnits += quantities.delivered;
       returnedUnits += quantities.returned;
       pendingUnits += remaining;
@@ -3262,8 +3263,8 @@ app.get('/api/bills/export', async (req, res) => {
 
       for (const item of items) {
         const ordered = Number(item.qty_ordered);
-        const delivered = Number(item.qty_delivered);
-        const returned = Number(item.qty_returned);
+        const delivered = isCancelled ? 0 : Number(item.qty_delivered);
+        const returned = isCancelled ? ordered : Number(item.qty_returned);
         itemRows.push([
           selectedDate,
           bill.bill_no,
@@ -3274,7 +3275,7 @@ app.get('/api/bills/export', async (req, res) => {
           ordered,
           delivered,
           returned,
-          returned > 0 ? item.return_type : '',
+          isCancelled ? 'Bill cancelled' : returned > 0 ? item.return_type : '',
           status === 'Cancelled' ? 0 : Math.max(0, ordered - delivered - returned),
           status
         ]);
