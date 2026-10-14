@@ -1942,6 +1942,23 @@ app.get('/api/profitability/at-stock', async (req, res) => {
       [req.user.companyId, selectedDate]
     );
 
+    const removalRows = await req.app.locals.db.all(
+      `SELECT id, stock_date AS stockDate, UPPER(TRIM(sales_category)) AS category, TRIM(item_code) AS itemCode,
+              TRIM(item_name) AS itemName, qty, remarks, created_by AS createdBy
+       FROM at_stock_removals WHERE company_id = ? AND stock_date <= ? ORDER BY id`,
+      [req.user.companyId, selectedDate]
+    );
+    const removalsByProduct = new Map();
+    for (const removal of removalRows) {
+      const key = atProductKey(removal);
+      if (!removalsByProduct.has(key)) removalsByProduct.set(key, new Map());
+      const byDate = removalsByProduct.get(key);
+      if (!byDate.has(removal.stockDate)) byDate.set(removal.stockDate, { qty: 0, entries: [] });
+      const day = byDate.get(removal.stockDate);
+      day.qty += Number(removal.qty);
+      day.entries.push(removal);
+    }
+
     const getProductKey = atProductKey;
     const salesByProduct = new Map();
     for (const row of salesRows) {
@@ -1995,7 +2012,8 @@ app.get('/api/profitability/at-stock', async (req, res) => {
       const key = getProductKey(product);
       const sales = salesByProduct.get(key) || new Map();
       const stock = stockByProduct.get(key) || new Map();
-      const dates = [...new Set([...sales.keys(), ...stock.keys(), selectedDate])]
+      const removals = removalsByProduct.get(key) || new Map();
+      const dates = [...new Set([...sales.keys(), ...stock.keys(), ...removals.keys(), selectedDate])]
         .filter(date => date <= selectedDate)
         .sort();
       // Tracking starts on the first date the admin enters an opening balance.
@@ -2012,13 +2030,15 @@ app.get('/api/profitability/at-stock', async (req, res) => {
         const returnQty = Number(sale?.returnQty || 0) * unitWeight;
         const purchaseQty = Number(stockEntry?.purchaseQty || 0);
         const damagedQty = Number(stockEntry?.damagedQty || 0);
-        onHand = opening + purchaseQty + returnQty - salesQty - damagedQty;
+        const removedQty = Number(removals.get(date)?.qty || 0);
+        onHand = opening + purchaseQty + returnQty - salesQty - damagedQty - removedQty;
         if (date === selectedDate) {
           const unitForInput = product.category === 'AT' ? (getAtPackWeightKg(product.itemName) || 1) : 1;
           const rawMatches = hasOpening && stockEntry.openingBags !== null && stockEntry.openingBags !== undefined &&
             Math.abs(stockEntry.openingBags * 30 + stockEntry.openingPcs * unitForInput - opening) < 0.001;
           selectedDay = {
-            openingQty: opening, purchaseQty, damagedQty, salesQty, returnQty, closingQty: onHand,
+            openingQty: opening, purchaseQty, damagedQty, removedQty, salesQty, returnQty, closingQty: onHand,
+            removals: (removals.get(date)?.entries || []).map(entry => ({ id: entry.id, quantity: Number(entry.qty), display: formatAtQuantity({ category: product.category, packWeightKg: product.category === 'AT' ? getAtPackWeightKg(product.itemName) : null }, Number(entry.qty)), remarks: entry.remarks, createdBy: entry.createdBy })),
             tallied: Boolean(stockEntry?.tallied),
             openingInput: rawMatches ? { bags: stockEntry.openingBags, pcs: stockEntry.openingPcs } : null
           };
@@ -2038,12 +2058,14 @@ app.get('/api/profitability/at-stock', async (req, res) => {
       return sendXlsx(res, createWorkbook([{
         name: 'AT Stock',
         rows: [
-          ['Category', 'Product', 'Opening', 'Sales', 'Sales return', 'Purchase', 'Damaged', 'Closing', 'Tallied'],
+          ['Category', 'Product', 'Opening', 'Sales', 'Sales return', 'Purchase', 'Damaged', 'Removed', 'Removal remarks', 'Closing', 'Tallied'],
           ...rows.map(row => [
             row.category, row.displayName,
             formatAtQuantity(row, row.openingQty), formatAtQuantity(row, row.salesQty),
             formatAtQuantity(row, row.returnQty), formatAtQuantity(row, row.purchaseQty),
-            formatAtQuantity(row, row.damagedQty), formatAtQuantity(row, row.closingQty),
+            formatAtQuantity(row, row.damagedQty), formatAtQuantity(row, row.removedQty || 0),
+            (row.removals || []).map(entry => entry.remarks).filter(Boolean).join('; '),
+            formatAtQuantity(row, row.closingQty),
             row.tallied ? 'Yes' : 'No'
           ])
         ],
@@ -2055,6 +2077,48 @@ app.get('/api/profitability/at-stock', async (req, res) => {
     console.error('AT stock report failed:', error);
     res.status(500).json({ error: 'Unable to load AT stock for this date.' });
   }
+});
+
+app.post('/api/profitability/at-stock/removals', async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only an administrator can remove stock from the warehouse.' });
+  }
+  const selectedDate = normalizeDeliveryDate(req.body?.date);
+  const category = String(req.body?.category || '').trim().toUpperCase();
+  const itemCode = String(req.body?.itemCode || '').trim();
+  const itemName = String(req.body?.itemName || '').trim();
+  const quantity = req.body?.quantity;
+  const remarks = String(req.body?.remarks || '').trim();
+  if (!selectedDate || !['AT', 'BC'].includes(category) || !itemName || itemName.length > 300 || itemCode.length > 100 ||
+      typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity <= 0 || quantity > 1000000000 || remarks.length > 500) {
+    return res.status(400).json({ error: 'Enter a product, a quantity greater than zero and remarks up to 500 characters.' });
+  }
+  const product = canonicalAtProduct({ category, itemCode, itemName });
+  if (product.category === 'AT' && !getAtPackWeightKg(product.itemName)) {
+    return res.status(400).json({ error: 'This product needs a pack size in its name before stock can be removed.' });
+  }
+  try {
+    await req.app.locals.db.run(
+      `INSERT INTO at_stock_removals (company_id, stock_date, sales_category, item_code, item_name, qty, remarks, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [req.user.companyId, selectedDate, product.category, product.itemCode, product.itemName, quantity, remarks, req.user.fullName || req.user.username || '']
+    );
+    res.json({ message: 'Stock removed from the warehouse.' });
+  } catch (error) {
+    console.error('AT stock removal failed:', error);
+    res.status(500).json({ error: 'Unable to remove this stock. Please try again.' });
+  }
+});
+
+app.delete('/api/profitability/at-stock/removals/:id', async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only an administrator can undo a stock removal.' });
+  }
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: 'Choose a valid removal.' });
+  const result = await req.app.locals.db.run('DELETE FROM at_stock_removals WHERE id = ? AND company_id = ?', [id, req.user.companyId]);
+  if (!result.changes) return res.status(404).json({ error: 'This removal no longer exists.' });
+  res.json({ message: 'Stock removal undone.' });
 });
 
 app.put('/api/profitability/at-stock/:date', async (req, res) => {

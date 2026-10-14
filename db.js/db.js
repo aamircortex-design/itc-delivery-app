@@ -112,6 +112,18 @@ async function initDb() {
       assigned INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (company_id, assign_date, agent_key, sales_category, item_code, item_name)
     );
+    CREATE TABLE IF NOT EXISTS at_stock_removals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL,
+      stock_date TEXT NOT NULL,
+      sales_category TEXT NOT NULL CHECK (sales_category IN ('AT', 'BC')),
+      item_code TEXT NOT NULL DEFAULT '',
+      item_name TEXT NOT NULL,
+      qty REAL NOT NULL CHECK (qty > 0),
+      remarks TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
     CREATE TABLE IF NOT EXISTS bill_tracker_settings (
       company_id INTEGER PRIMARY KEY,
       start_bill TEXT NOT NULL

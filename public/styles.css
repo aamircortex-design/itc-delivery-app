@@ -482,3 +482,9 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .bill-tracker[hidden] { display: none; }
 .upload-lock-banner { margin: 0 0 16px; padding: 12px 14px; border: 1px solid #f0b9b9; border-radius: 8px; background: #fdecec; color: #a12727; font-weight: 600; }
 .upload-lock-banner[hidden] { display: none; }
+.at-removal-list { margin: 0 0 6px; padding: 0; list-style: none; font-size: 12px; }
+.at-removal-list li { display: flex; gap: 6px; align-items: center; justify-content: space-between; }
+.at-removal-undo { border: 0; background: none; color: #a12727; cursor: pointer; font-size: 13px; }
+.at-removal-form { display: grid; gap: 12px; }
+.at-removal-form label { display: grid; gap: 4px; font-weight: 600; }
+.at-removal-form textarea { font: inherit; padding: 8px; border: 1px solid #d5dbd7; border-radius: 6px; }
