@@ -51,6 +51,7 @@
           </a>
           <a class="nav-link" id="at-stock-link" href="#at-stock" hidden><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 8l8-4 8 4v8l-8 4-8-4V8zm0 0l8 4m8-4l-8 4m0 8v-8" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg> AT &amp; BC</a>
           <a class="nav-link" id="k4-link" href="#k4" hidden><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 5h14v14H5V5zm4 4v6m0-3l3-3m-3 3l3 3m3-6v6h3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg> K4</a>
+          <a class="nav-link" id="horeca-link" href="#horeca" hidden><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 4h10l2 4v12H5V8l2-4zm-2 4h14m-9 5h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>           HORECA & ISS</a>
         </nav>
 
         <div class="sidebar-bottom">
@@ -208,6 +209,57 @@
             <div class="table-footer"><span id="table-footer-copy">Showing 0 deliveries</span><span class="footer-note"><span class="footer-live-dot"></span> Up to date</span></div>
           </section>
           <footer class="page-footer"><span>Keep your deliveries moving.</span><span>TAF Disti Desk <span class="footer-separator">·</span> Delivery tracker</span><span class="creator-credit">Created by Aamir Rahman · TAF Tech</span></footer>
+        </div>
+
+        <div class="page-content orders-page" id="orders" hidden>
+          <section class="page-heading">
+            <div>
+              <div class="eyebrow"><span class="eyebrow-dot"></span> <span id="orders-eyebrow">HORECA & ISS · ORDER TAKING</span></div>
+              <h1 id="orders-heading">Take <span>orders.</span></h1>
+              <p class="page-subtitle">Record outlet orders as salesmen place them and track their status.</p>
+            </div>
+          </section>
+          <section class="deliveries-panel orders-panel">
+            <form id="order-form" class="orders-form">
+              <div class="dialog-error" id="order-error" role="alert" hidden></div>
+              <div class="orders-grid">
+                <label>Channel <select id="order-channel"><option value="HORECA">HORECA</option><option value="ISS">ISS</option></select></label>
+                <label>Beat <select id="order-beat"></select></label>
+                <label>Customer <select id="order-customer" required></select></label>
+                <label>Order date <input id="order-date" type="date" required></label>
+                <label id="order-salesman-field">Salesman <input id="order-salesman" maxlength="100" autocomplete="off"></label>
+              </div>
+              <label>Search items <input id="order-search" type="search" autocomplete="off" placeholder="Type to filter items"></label>
+              <div class="table-scroll"><table><thead><tr><th>Item</th><th>Basic / M</th><th>GST / M</th><th>Net rate / M</th><th>Qty (M)</th><th>Amount</th></tr></thead><tbody id="order-stock-rows"></tbody></table></div>
+              <p class="at-stock-empty" id="order-stock-empty" hidden>No items uploaded yet.</p>
+              <p><strong>Order total: <span id="order-total">₹0.00</span></strong> · <span id="order-line-count">0 items</span></p>
+              <label>Notes <textarea id="order-notes" maxlength="500" rows="2"></textarea></label>
+              <button class="button" type="submit">Save order</button>
+            </form>
+          </section>
+          <section class="deliveries-panel orders-panel" id="order-upload-panel" hidden>
+            <div class="panel-header"><h2>Master data</h2></div>
+            <p>Item master (price list .xlsx): Item Code (E), Item Description (F), Basic rate per M (O), GST = CGST (Q) + SGST (R), Net rate per M (T). Orders are taken in M (1 M = 1000 sticks) at the net rate; stock is not tracked. Customer file columns: Customer Name, Beat, optional Salesman, Channel (HORECA/ISS or blank), Address. Each upload replaces the previous data.</p>
+            <label>Item master (price list) <input id="order-stock-file" type="file" accept=".xlsx,.csv"></label>
+            <label>Customer master file <input id="order-customer-file" type="file" accept=".xlsx,.csv"></label>
+            <p id="order-upload-status" role="status"></p>
+            <button class="button button-secondary" type="button" id="clear-stock-master">Remove item master</button>
+            <button class="button button-secondary" type="button" id="clear-customer-master">Remove customer master</button>
+            <h3>Customer master (<span id="master-count">0</span>)</h3>
+            <label>Filter by beat <select id="master-beat-filter"></select></label>
+            <div class="table-scroll"><table><thead><tr><th>Beat</th><th>Customer</th><th>Channel</th><th>Salesman</th><th>Address</th></tr></thead><tbody id="master-rows"></tbody></table></div>
+            <p class="at-stock-empty" id="master-empty" hidden>No customer master uploaded yet.</p>
+          </section>
+          <section class="deliveries-panel orders-panel">
+            <div class="panel-header"><h2>Orders for <span id="orders-list-date"></span> · <span id="orders-summary"></span></h2></div>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>#</th><th>Outlet</th><th>Salesman</th><th>Items</th><th>Total</th><th>Status</th></tr></thead>
+                <tbody id="orders-rows"></tbody>
+              </table>
+            </div>
+            <p class="at-stock-empty" id="orders-empty" hidden>No orders for this date.</p>
+          </section>
         </div>
 
         <div class="page-content profitability-page" id="profitability" hidden>

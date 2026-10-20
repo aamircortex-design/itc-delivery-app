@@ -488,3 +488,9 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .at-removal-form { display: grid; gap: 12px; }
 .at-removal-form label { display: grid; gap: 4px; font-weight: 600; }
 .at-removal-form textarea { font: inherit; padding: 8px; border: 1px solid #d5dbd7; border-radius: 6px; }
+
+.orders-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:12px}
+.orders-add-item{align-items:end}
+.orders-form,.orders-panel .panel-header{padding:16px}
+.orders-form label{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+.orders-form textarea{width:100%}

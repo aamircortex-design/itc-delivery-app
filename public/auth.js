@@ -100,7 +100,7 @@ async function loadUsers() {
 }
 
 function roleLabel(role) {
-  return { admin: 'Admin', manager: 'Manager', delivery_partner: 'Delivery Partner' }[role] || role;
+  return { admin: 'Admin', manager: 'Manager', delivery_partner: 'Delivery Partner', horeca_iss_ds: 'HORECA & ISS DS' }[role] || role;
 }
 
 document.querySelector('#user-list-body')?.addEventListener('click', async event => {

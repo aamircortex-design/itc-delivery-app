@@ -189,7 +189,7 @@ function validateUserDetails(details = {}) {
   if (user.password.length < 8 || user.password.length > 128) {
     throw new Error('Password must be between 8 and 128 characters.');
   }
-  if (!['admin', 'manager', 'delivery_partner'].includes(user.role)) {
+  if (!['admin', 'manager', 'delivery_partner', 'horeca_iss_ds'].includes(user.role)) {
     throw new Error('Choose a valid user role.');
   }
 
@@ -226,6 +226,15 @@ async function authenticateRequest(req, res, next) {
         return res.status(401).json({ error: 'Please sign in to continue.' });
       }
       return res.redirect(303, '/login');
+    }
+
+    if (
+      req.user.role === 'horeca_iss_ds' &&
+      req.path.startsWith('/api/') &&
+      !req.path.startsWith('/api/auth/') &&
+      !req.path.startsWith('/api/orders')
+    ) {
+      return res.status(403).json({ error: 'Your account can only take HORECA and ISS orders.' });
     }
 
     if (
@@ -846,6 +855,366 @@ app.delete('/api/users/:id', async (req, res) => {
     if (transactionOpen) await db.exec('ROLLBACK');
     console.error('Could not remove user:', error);
     res.status(500).json({ error: 'Could not remove user. Please try again.' });
+  }
+});
+
+const ORDER_STATUSES = ['New', 'Confirmed', 'Delivered', 'Cancelled'];
+const ORDER_CHANNELS = ['HORECA', 'ISS'];
+const isOrderManager = user => ['admin', 'manager'].includes(user.role);
+
+function requireOrderAccess(req, res, next) {
+  if (!isOrderManager(req.user) && req.user.role !== 'horeca_iss_ds') {
+    return res.status(403).json({ error: 'You do not have access to order taking.' });
+  }
+  next();
+}
+
+function requireOrderManager(req, res, next) {
+  if (!isOrderManager(req.user)) {
+    return res.status(403).json({ error: 'Only administrators and managers can upload order data.' });
+  }
+  next();
+}
+
+function requireOrderAdmin(req, res, next) {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only administrators can upload or view the master data.' });
+  }
+  next();
+}
+
+function pickColumn(headers, aliases) {
+  return headers.findIndex(header => aliases.includes(normalizeHeader(header)));
+}
+
+function findOrderHeaderRow(rows, requiredGroups) {
+  return rows.findIndex(row => {
+    const headers = row.map(normalizeHeader);
+    return requiredGroups.every(group => group.some(alias => headers.includes(alias)));
+  });
+}
+
+const STOCK_NAME_ALIASES = ['itemname', 'item', 'productname', 'product', 'description', 'itemdescription', 'skuname'];
+const STOCK_CODE_ALIASES = ['itemcode', 'productcode', 'sku', 'code', 'itemid'];
+const STOCK_RATE_ALIASES = ['rate', 'price', 'sellingprice', 'unitprice', 'mrp', 'pts', 'ptr', 'salesrate'];
+const STOCK_QTY_ALIASES = ['stock', 'stockqty', 'quantity', 'qty', 'availableqty', 'availablestock', 'closingstock', 'balance'];
+
+app.post('/api/orders/stock', requireOrderAdmin, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Choose the price list file to upload.' });
+  const db = req.app.locals.db;
+  let transactionOpen = false;
+  try {
+    const rows = await readTabularFile(req.file);
+    const headerIndex = findOrderHeaderRow(rows, [STOCK_CODE_ALIASES, STOCK_NAME_ALIASES]);
+    if (headerIndex === -1) {
+      return res.status(400).json({ error: 'Could not find the Item Code and Item Description columns.' });
+    }
+    if ((rows[headerIndex] || []).length < 20) {
+      return res.status(400).json({ error: 'The price list needs the rate columns O, Q, R and T.' });
+    }
+    // Price list layout: E item code, F description, O basic rate per M, Q CGST, R SGST, T net rate per M.
+    const items = new Map();
+    rows.slice(headerIndex + 1).forEach((row, index) => {
+      const itemName = String(row[5] ?? '').trim();
+      const itemCode = String(row[4] ?? '').trim();
+      if (!itemName && !itemCode) return;
+      const rowNumber = headerIndex + index + 2;
+      if (!itemName || itemName.length > 200) throw new Error(`Row ${rowNumber} has a missing or too long item description.`);
+      const baseRate = parseAmount(row[14], 'basic rate (column O)', rowNumber);
+      const cgst = parseAmount(row[16], 'CGST (column Q)', rowNumber);
+      const sgst = parseAmount(row[17], 'SGST (column R)', rowNumber);
+      const netRate = parseAmount(row[19], 'net rate (column T)', rowNumber);
+      if (baseRate < 0 || cgst < 0 || sgst < 0 || netRate < 0) {
+        throw new Error(`Row ${rowNumber} has a negative price.`);
+      }
+      items.set(itemName.toLowerCase(), {
+        itemName,
+        itemCode: itemCode.slice(0, 100),
+        baseRate,
+        gstAmount: cgst + sgst,
+        netRate
+      });
+    });
+    if (!items.size) return res.status(400).json({ error: 'The file has no item rows.' });
+
+    await db.exec('BEGIN IMMEDIATE');
+    transactionOpen = true;
+    await db.run('DELETE FROM order_stock WHERE company_id = ?', [req.user.companyId]);
+    for (const item of items.values()) {
+      await db.run(
+        'INSERT INTO order_stock (company_id, item_code, item_name, rate, base_rate, gst_amount, stock_qty) VALUES (?, ?, ?, ?, ?, ?, 0)',
+        [req.user.companyId, item.itemCode, item.itemName, item.netRate, item.baseRate, item.gstAmount]
+      );
+    }
+    await db.exec('COMMIT');
+    transactionOpen = false;
+    res.json({ count: items.size });
+  } catch (error) {
+    if (transactionOpen) await db.exec('ROLLBACK').catch(() => {});
+    if (/^Row |Could not find|The price list/.test(error.message)) return res.status(400).json({ error: error.message });
+    console.error('Could not import price list:', error);
+    res.status(500).json({ error: 'Could not import the price list. Please try again.' });
+  }
+});
+
+const CUSTOMER_NAME_ALIASES = ['customername', 'customer', 'outletname', 'outlet', 'name', 'storename'];
+const CUSTOMER_SALESMAN_ALIASES = ['salesman', 'salesmanname', 'salesperson', 'salesrep', 'dsname', 'ds'];
+const CUSTOMER_CHANNEL_ALIASES = ['channel', 'channeltype', 'type', 'segment'];
+const CUSTOMER_ADDRESS_ALIASES = ['address', 'location', 'area'];
+const CUSTOMER_BEAT_ALIASES = ['beat', 'beatname', 'route', 'routename'];
+
+app.delete('/api/orders/stock', requireOrderAdmin, async (req, res) => {
+  try {
+    const result = await req.app.locals.db.run('DELETE FROM order_stock WHERE company_id = ?', [req.user.companyId]);
+    res.json({ removed: result.changes });
+  } catch (error) {
+    console.error('Could not clear stock:', error);
+    res.status(500).json({ error: 'Could not remove the item master.' });
+  }
+});
+
+app.delete('/api/orders/customers', requireOrderAdmin, async (req, res) => {
+  try {
+    const result = await req.app.locals.db.run('DELETE FROM order_customers WHERE company_id = ?', [req.user.companyId]);
+    res.json({ removed: result.changes });
+  } catch (error) {
+    console.error('Could not clear customers:', error);
+    res.status(500).json({ error: 'Could not remove the customer master.' });
+  }
+});
+
+app.get('/api/orders/customers', requireOrderAdmin, async (req, res) => {
+  try {
+    const customers = await req.app.locals.db.all(
+      `SELECT id, beat, name, channel, salesman, address FROM order_customers
+       WHERE company_id = ? ORDER BY beat COLLATE NOCASE, name COLLATE NOCASE`,
+      [req.user.companyId]
+    );
+    res.json({ customers });
+  } catch (error) {
+    console.error('Could not load customer master:', error);
+    res.status(500).json({ error: 'Could not load the customer master.' });
+  }
+});
+
+app.post('/api/orders/customers', requireOrderAdmin, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Choose a customer file to upload.' });
+  const db = req.app.locals.db;
+  let transactionOpen = false;
+  try {
+    const rows = await readTabularFile(req.file);
+    const headerIndex = findOrderHeaderRow(rows, [
+      CUSTOMER_NAME_ALIASES,
+      [...CUSTOMER_BEAT_ALIASES, ...CUSTOMER_SALESMAN_ALIASES, ...CUSTOMER_CHANNEL_ALIASES, ...CUSTOMER_ADDRESS_ALIASES]
+    ]);
+    if (headerIndex === -1) return res.status(400).json({ error: 'Could not find a Customer Name column with Beat or Salesman columns.' });
+    const headers = rows[headerIndex];
+    const statusCol = pickColumn(headers, ['customerstatus', 'status']);
+    const nameCol = pickColumn(headers, CUSTOMER_NAME_ALIASES);
+    const salesmanCol = pickColumn(headers, CUSTOMER_SALESMAN_ALIASES);
+    const channelCol = pickColumn(headers, CUSTOMER_CHANNEL_ALIASES);
+    const addressCol = pickColumn(headers, CUSTOMER_ADDRESS_ALIASES);
+    const beatCol = pickColumn(headers, CUSTOMER_BEAT_ALIASES);
+
+    const customers = new Map();
+    rows.slice(headerIndex + 1).forEach((row, index) => {
+      const name = String(row[nameCol] ?? '').trim();
+      if (!name) return;
+      if (statusCol !== -1 && String(row[statusCol] ?? '').trim().toLowerCase() === 'inactive') return;
+      const rowNumber = headerIndex + index + 2;
+      const channel = channelCol === -1 ? '' : String(row[channelCol] ?? '').trim().toUpperCase();
+      if (name.length > 200 || !['', ...ORDER_CHANNELS].includes(channel)) {
+        throw new Error(`Row ${rowNumber} has an invalid customer name or channel (use HORECA or ISS).`);
+      }
+      const beat = beatCol === -1 ? '' : String(row[beatCol] ?? '').trim().slice(0, 100);
+      customers.set(`${name.toLowerCase()}|${channel}`, {
+        name,
+        channel,
+        beat,
+        salesman: salesmanCol === -1 ? '' : String(row[salesmanCol] ?? '').trim().slice(0, 100),
+        address: addressCol === -1 ? '' : String(row[addressCol] ?? '').trim().slice(0, 300)
+      });
+    });
+    if (!customers.size) return res.status(400).json({ error: 'The file has no customer rows.' });
+
+    await db.exec('BEGIN IMMEDIATE');
+    transactionOpen = true;
+    await db.run('DELETE FROM order_customers WHERE company_id = ?', [req.user.companyId]);
+    for (const customer of customers.values()) {
+      await db.run(
+        'INSERT INTO order_customers         (company_id, name, channel, salesman, address, beat) VALUES (?, ?, ?, ?, ?, ?)',
+                [req.user.companyId, customer.name, customer.channel, customer.salesman, customer.address, customer.beat]
+      );
+    }
+    await db.exec('COMMIT');
+    transactionOpen = false;
+    res.json({ count: customers.size });
+  } catch (error) {
+    if (transactionOpen) await db.exec('ROLLBACK').catch(() => {});
+    if (/^Row |Could not find/.test(error.message)) return res.status(400).json({ error: error.message });
+    console.error('Could not import customers:', error);
+    res.status(500).json({ error: 'Could not import the customer file. Please try again.' });
+  }
+});
+
+async function getVisibleCustomers(db, user, channel) {
+  const params = [user.companyId, channel];
+  let salesmanFilter = '';
+  if (user.role === 'horeca_iss_ds') {
+    salesmanFilter = 'AND (salesman = ? OR salesman = ?)';
+    params.push(user.fullName, user.userId);
+  }
+  return db.all(
+    `SELECT id, name, address, beat FROM order_customers
+     WHERE company_id = ? AND channel IN ('', ?) ${salesmanFilter} ORDER BY name COLLATE NOCASE`,
+    params
+  );
+}
+
+app.get('/api/orders/lookups', requireOrderAccess, async (req, res) => {
+  const channel = String(req.query.channel || '');
+  if (!ORDER_CHANNELS.includes(channel)) return res.status(400).json({ error: 'Choose HORECA or ISS.' });
+  try {
+    const db = req.app.locals.db;
+    const customers = await getVisibleCustomers(db, req.user, channel);
+    const stock = await db.all(
+      `SELECT id, item_code AS itemCode, item_name AS itemName, rate, base_rate AS baseRate, gst_amount AS gstAmount
+       FROM order_stock WHERE company_id = ? ORDER BY item_name COLLATE NOCASE`,
+      [req.user.companyId]
+    );
+    res.json({ customers, stock, canUpload: req.user.role === 'admin' });
+  } catch (error) {
+    console.error('Could not load order lookups:', error);
+    res.status(500).json({ error: 'Could not load customers and stock.' });
+  }
+});
+
+app.get('/api/orders', requireOrderAccess, async (req, res) => {
+  const date = String(req.query.date || '');
+  const channel = String(req.query.channel || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'Choose a valid date.' });
+  }
+  if (!ORDER_CHANNELS.includes(channel)) {
+    return res.status(400).json({ error: 'Choose HORECA or ISS.' });
+  }
+  try {
+    const db = req.app.locals.db;
+    const params = [req.user.companyId, date, channel];
+    let ownerFilter = '';
+    if (req.user.role === 'horeca_iss_ds') {
+      ownerFilter = 'AND created_by = ?';
+      params.push(req.user.id);
+    }
+    const orders = await db.all(
+      `SELECT id, outlet_name AS outletName, salesman, order_date AS orderDate, status, notes, created_at AS createdAt
+       FROM sales_orders WHERE company_id = ? AND order_date = ? AND channel = ? ${ownerFilter} ORDER BY id DESC`,
+      params
+    );
+    let grandTotal = 0;
+    for (const order of orders) {
+      order.items = await db.all(
+        'SELECT item_name AS itemName, qty, rate FROM sales_order_items WHERE order_id = ? ORDER BY id',
+        [order.id]
+      );
+      order.total = order.items.reduce((sum, item) => sum + item.qty * item.rate, 0);
+      if (order.status !== 'Cancelled') grandTotal += order.total;
+    }
+    res.json({
+      orders,
+      summary: { count: orders.filter(order => order.status !== 'Cancelled').length, total: grandTotal }
+    });
+  } catch (error) {
+    console.error('Could not load orders:', error);
+    res.status(500).json({ error: 'Could not load orders.' });
+  }
+});
+
+app.post('/api/orders', requireOrderAccess, async (req, res) => {
+  const customerId = Number(req.body?.customerId);
+  const notes = String(req.body?.notes || '').trim();
+  const orderDate = String(req.body?.orderDate || '');
+  const channel = String(req.body?.channel || '');
+  const items = Array.isArray(req.body?.items) ? req.body.items : [];
+  if (!ORDER_CHANNELS.includes(channel)) return res.status(400).json({ error: 'Choose HORECA or ISS.' });
+  if (!Number.isInteger(customerId)) return res.status(400).json({ error: 'Select a customer.' });
+  if (notes.length > 500) return res.status(400).json({ error: 'Notes are too long.' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDate)) return res.status(400).json({ error: 'Choose a valid order date.' });
+  if (!items.length || items.length > 200) return res.status(400).json({ error: 'Add at least one item.' });
+
+  const quantities = new Map();
+  for (const item of items) {
+    const stockId = Number(item?.stockId);
+    const qty = Math.round(Number(item?.qty) * 1000) / 1000;
+    if (!Number.isInteger(stockId) || !Number.isFinite(qty) || qty < 0.001 || qty > 100000) {
+      return res.status(400).json({ error: 'Each item needs a valid product and a quantity in M of at least 0.001.' });
+    }
+    quantities.set(stockId, Math.round(((quantities.get(stockId) || 0) + qty) * 1000) / 1000);
+  }
+
+  const db = req.app.locals.db;
+  let transactionOpen = false;
+  try {
+    const customer = (await getVisibleCustomers(db, req.user, channel)).find(row => row.id === customerId);
+    if (!customer) return res.status(400).json({ error: 'Select one of your customers.' });
+
+    await db.exec('BEGIN IMMEDIATE');
+    transactionOpen = true;
+    const lines = [];
+    for (const [stockId, qty] of quantities) {
+      const stock = await db.get(
+        'SELECT id, item_name AS itemName, rate FROM order_stock WHERE id = ? AND company_id = ?',
+        [stockId, req.user.companyId]
+      );
+      if (!stock) throw Object.assign(new Error('An item is no longer in the price list. Refresh and try again.'), { client: true });
+      lines.push({ itemName: stock.itemName, rate: stock.rate, qty });
+    }
+    const salesman = req.user.role === 'horeca_iss_ds' ? req.user.fullName : String(req.body?.salesman || '').trim().slice(0, 100);
+    const result = await db.run(
+      `INSERT INTO sales_orders (company_id, channel, outlet_name, salesman, order_date, notes, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [req.user.companyId, channel, customer.name, salesman, orderDate, notes, req.user.id]
+    );
+    for (const line of lines) {
+      await db.run(
+        'INSERT INTO sales_order_items (order_id, item_name, qty, rate) VALUES (?, ?, ?, ?)',
+        [result.lastID, line.itemName, line.qty, line.rate]
+      );
+    }
+    await db.exec('COMMIT');
+    transactionOpen = false;
+    res.status(201).json({ id: result.lastID, total: lines.reduce((sum, line) => sum + line.qty * line.rate, 0) });
+  } catch (error) {
+    if (transactionOpen) await db.exec('ROLLBACK').catch(() => {});
+    if (error.client) return res.status(400).json({ error: error.message });
+    console.error('Could not save order:', error);
+    res.status(500).json({ error: 'Could not save the order. Please try again.' });
+  }
+});
+
+app.patch('/api/orders/:id/status', requireOrderAdmin, async (req, res) => {
+  const status = String(req.body?.status || '');
+  if (!ORDER_STATUSES.includes(status)) return res.status(400).json({ error: 'Choose a valid status.' });
+  const db = req.app.locals.db;
+  let transactionOpen = false;
+  try {
+    await db.exec('BEGIN IMMEDIATE');
+    transactionOpen = true;
+    const order = await db.get('SELECT id, status FROM sales_orders WHERE id = ? AND company_id = ?', [req.params.id, req.user.companyId]);
+    if (!order) {
+      await db.exec('ROLLBACK');
+      transactionOpen = false;
+      return res.status(404).json({ error: 'Order not found.' });
+    }
+    await db.run('UPDATE sales_orders SET status = ? WHERE id = ?', [status, order.id]);
+    await db.exec('COMMIT');
+    transactionOpen = false;
+    res.json({ ok: true });
+  } catch (error) {
+    if (transactionOpen) await db.exec('ROLLBACK').catch(() => {});
+    if (error.client) return res.status(400).json({ error: error.message });
+    console.error('Could not update order:', error);
+    res.status(500).json({ error: 'Could not update the order.' });
   }
 });
 

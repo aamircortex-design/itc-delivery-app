@@ -366,6 +366,13 @@ async function loadCurrentUser() {
   document.querySelector('#at-stock-link').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#delivery-bill-tracker').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#k4-link').hidden = user.role !== 'admin';
+  document.querySelector('#horeca-link').hidden = !['admin', 'manager', 'horeca_iss_ds'].includes(user.role);
+    if (user.role === 'horeca_iss_ds') {
+      for (const id of ['overview-link', 'deliveries-link', 'open-rt-damage', 'profitability-link', 'at-stock-link', 'k4-link', 'user-management-link']) {
+        document.querySelector(`#${id}`).hidden = true;
+      }
+      document.querySelector('.help-card').hidden = true;
+    }
   document.querySelector('#open-upload').hidden = user.role === 'delivery_partner';
   document.querySelector('#download-template').hidden = user.role === 'delivery_partner';
   document.querySelector('#modal-template').hidden = user.role === 'delivery_partner';
@@ -397,6 +404,11 @@ async function loadCurrentUser() {
   initializeProfitabilityDates();
   initializeAtStockInterface();
   initializeK4Interface();
+  if (user.role === 'horeca_iss_ds') {
+    showDashboardPage('horeca');
+    openOrdersPage();
+    return;
+  }
   showDashboardPage('deliveries');
   renderRows();
 }
@@ -899,6 +911,262 @@ async function saveAtStock() {
   }
 }
 
+let orderQuantities = new Map();
+let orderStock = [];
+let orderCustomers = [];
+let ordersInitialized = false;
+let currentOrderChannel = 'HORECA';
+const formatMoney = value => `₹${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+function setOrderError(message = '') {
+  const error = document.querySelector('#order-error');
+  error.textContent = message;
+  error.hidden = !message;
+}
+
+function updateOrderTotal() {
+  let total = 0;
+  let lines = 0;
+  for (const item of orderStock) {
+    const qty = orderQuantities.get(item.id) || 0;
+    if (qty > 0) {
+      total += qty * item.rate;
+      lines += 1;
+    }
+    const cell = document.querySelector(`[data-line-total="${item.id}"]`);
+    if (cell) cell.textContent = qty > 0 ? formatMoney(qty * item.rate) : '';
+  }
+  document.querySelector('#order-total').textContent = formatMoney(total);
+  document.querySelector('#order-line-count').textContent = `${lines} item${lines === 1 ? '' : 's'}`;
+}
+
+function renderOrderStock() {
+  const search = document.querySelector('#order-search').value.trim().toLowerCase();
+  const rows = orderStock.filter(item => !search || `${item.itemName} ${item.itemCode}`.toLowerCase().includes(search));
+  document.querySelector('#order-stock-empty').hidden = orderStock.length > 0;
+  document.querySelector('#order-stock-rows').innerHTML = rows.map(item => `
+    <tr>
+      <td>${escapeHtml(item.itemName)}${item.itemCode ? `<br><small>${escapeHtml(item.itemCode)}</small>` : ''}</td>
+      <td>${formatMoney(item.baseRate)}</td>
+      <td>${formatMoney(item.gstAmount)}</td>
+      <td>${formatMoney(item.rate)}</td>
+      <td><input type="number" min="0" step="0.001" inputmode="decimal" data-stock-id="${item.id}"
+        value="${orderQuantities.get(item.id) || ''}" aria-label="Quantity of ${escapeHtml(item.itemName)}"></td>
+      <td data-line-total="${item.id}"></td>
+    </tr>`).join('');
+  updateOrderTotal();
+}
+
+function renderOrderCustomers() {
+  const beat = document.querySelector('#order-beat').value;
+  const select = document.querySelector('#order-customer');
+  const selected = select.value;
+  const customers = orderCustomers.filter(customer => customer.beat === beat);
+  select.innerHTML = '<option value="">Select a customer</option>' +
+    customers.map(customer => `<option value="${customer.id}">${escapeHtml(customer.name)}</option>`).join('');
+  if (customers.some(customer => String(customer.id) === selected)) select.value = selected;
+}
+
+async function loadOrders() {
+  const date = document.querySelector('#order-date').value || getLocalDateValue();
+  document.querySelector('#orders-list-date').textContent = formatDate(date);
+  const canChangeStatus = currentUser?.role === 'admin';
+  try {
+    const { orders, summary } = await requestJson(`/api/orders?date=${encodeURIComponent(date)}&channel=${currentOrderChannel}`);
+    document.querySelector('#orders-empty').hidden = orders.length > 0;
+    document.querySelector('#orders-summary').textContent = `${summary.count} order${summary.count === 1 ? '' : 's'} · ${formatMoney(summary.total)}`;
+    document.querySelector('#orders-rows').innerHTML = orders.map(order => `
+      <tr>
+        <td>${order.id}</td>
+        <td>${escapeHtml(order.outletName)}${order.notes ? `<br><small>${escapeHtml(order.notes)}</small>` : ''}</td>
+        <td>${escapeHtml(order.salesman)}</td>
+        <td>${order.items.map(item => `${escapeHtml(item.itemName)} × ${item.qty} M @ ${formatMoney(item.rate)}/M`).join('<br>')}</td>
+        <td>${formatMoney(order.total)}</td>
+        <td>${canChangeStatus
+          ? `<select data-order-status="${order.id}">${['New', 'Confirmed', 'Delivered', 'Cancelled']
+            .map(status => `<option${status === order.status ? ' selected' : ''}>${status}</option>`).join('')}</select>`
+          : escapeHtml(order.status)}</td>
+      </tr>`).join('');
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+let customerMaster = [];
+
+function renderCustomerMaster() {
+  const filter = document.querySelector('#master-beat-filter');
+  const selected = filter.value;
+  const beats = [...new Set(customerMaster.map(customer => customer.beat))];
+  filter.innerHTML = '<option value="__all">All beats</option>' +
+    beats.map(beat => `<option value="${escapeHtml(beat)}">${escapeHtml(beat || 'No beat')}</option>`).join('');
+  filter.value = selected === '__all' || beats.includes(selected) ? selected || '__all' : '__all';
+  const rows = filter.value === '__all' ? customerMaster : customerMaster.filter(customer => customer.beat === filter.value);
+  document.querySelector('#master-count').textContent = `${rows.length}${rows.length === customerMaster.length ? '' : ` of ${customerMaster.length}`}`;
+  document.querySelector('#master-empty').hidden = customerMaster.length > 0;
+  document.querySelector('#master-rows').innerHTML = rows.map(customer => `
+    <tr><td>${escapeHtml(customer.beat)}</td><td>${escapeHtml(customer.name)}</td><td>${escapeHtml(customer.channel || 'Both')}</td>
+    <td>${escapeHtml(customer.salesman)}</td><td>${escapeHtml(customer.address)}</td></tr>`).join('');
+}
+
+async function loadCustomerMaster() {
+  try {
+    ({ customers: customerMaster } = await requestJson('/api/orders/customers'));
+    renderCustomerMaster();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function uploadOrderFile(kind, file) {
+  if (!file) return;
+  const status = document.querySelector('#order-upload-status');
+  const body = new FormData();
+  body.append('file', file);
+  status.textContent = 'Uploading…';
+  try {
+    const result = await requestJson(`/api/orders/${kind}`, { method: 'POST', body });
+    status.textContent = `${result.count} ${kind === 'stock' ? 'items' : 'customers'} imported.`;
+    loadOrderLookups();
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+async function clearOrderMaster(kind, label) {
+  if (!window.confirm(`Remove the entire ${label}? This cannot be undone.`)) return;
+  const status = document.querySelector('#order-upload-status');
+  try {
+    const result = await requestJson(`/api/orders/${kind}`, { method: 'DELETE' });
+    status.textContent = `${label} removed (${result.removed} rows).`;
+    await loadOrderLookups();
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+function initializeOrdersInterface() {
+  document.querySelector('#clear-stock-master').addEventListener('click', () => clearOrderMaster('stock', 'item master'));
+  document.querySelector('#clear-customer-master').addEventListener('click', () => clearOrderMaster('customers', 'customer master'));
+  document.querySelector('#order-search').addEventListener('input', renderOrderStock);
+  document.querySelector('#order-beat').addEventListener('change', renderOrderCustomers);
+  document.querySelector('#order-channel').addEventListener('change', event => {
+    currentOrderChannel = event.target.value;
+    orderQuantities = new Map();
+    document.querySelector('#order-customer').value = '';
+    loadOrderLookups();
+    loadOrders();
+  });
+  document.querySelector('#master-beat-filter').addEventListener('change', renderCustomerMaster);
+  document.querySelector('#order-stock-rows').addEventListener('input', event => {
+    const input = event.target.closest('[data-stock-id]');
+    if (!input) return;
+    const qty = Math.round(Number(input.value) * 1000) / 1000;
+    if (qty > 0) orderQuantities.set(Number(input.dataset.stockId), qty);
+    else orderQuantities.delete(Number(input.dataset.stockId));
+    updateOrderTotal();
+  });
+  document.querySelector('#order-stock-file').addEventListener('change', event => {
+    uploadOrderFile('stock', event.currentTarget.files[0]);
+    event.currentTarget.value = '';
+  });
+  document.querySelector('#order-customer-file').addEventListener('change', event => {
+    uploadOrderFile('customers', event.currentTarget.files[0]);
+    event.currentTarget.value = '';
+  });
+  document.querySelector('#order-date').addEventListener('change', loadOrders);
+  document.querySelector('#orders-rows').addEventListener('change', async event => {
+    const select = event.target.closest('[data-order-status]');
+    if (!select) return;
+    try {
+      await requestJson(`/api/orders/${select.dataset.orderStatus}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: select.value })
+      });
+      loadOrderLookups();
+    } catch (error) {
+      showToast(error.message, true);
+      loadOrders();
+    }
+  });
+  document.querySelector('#order-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const items = [...orderQuantities].map(([stockId, qty]) => ({ stockId, qty }));
+    const customerId = Number(document.querySelector('#order-customer').value);
+    if (!customerId) {
+      setOrderError('Select a beat and a customer.');
+      return;
+    }
+    if (!items.length) {
+      setOrderError('Enter a quantity for at least one item.');
+      return;
+    }
+    try {
+      const result = await requestJson('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId,
+          salesman: document.querySelector('#order-salesman').value,
+          orderDate: document.querySelector('#order-date').value,
+          channel: currentOrderChannel,
+          notes: document.querySelector('#order-notes').value,
+          items
+        })
+      });
+      orderQuantities = new Map();
+      document.querySelector('#order-notes').value = '';
+      setOrderError();
+      showToast(`Order saved · ${formatMoney(result.total)}`);
+      await loadOrderLookups();
+      loadOrders();
+    } catch (error) {
+      setOrderError(error.message);
+      loadOrderLookups();
+    }
+  });
+}
+
+async function loadOrderLookups() {
+  try {
+    const { customers, stock, canUpload } = await requestJson(`/api/orders/lookups?channel=${currentOrderChannel}`);
+    orderStock = stock;
+    orderCustomers = customers.map(customer => ({ ...customer, beat: customer.beat || '' }));
+    const beatSelect = document.querySelector('#order-beat');
+    const selectedBeat = beatSelect.value;
+    const beats = [...new Set(orderCustomers.map(customer => customer.beat))].sort((a, b) => a.localeCompare(b));
+    beatSelect.innerHTML = beats.map(beat => `<option value="${escapeHtml(beat)}">${escapeHtml(beat || 'No beat')}</option>`).join('');
+    if (beats.includes(selectedBeat)) beatSelect.value = selectedBeat;
+    renderOrderCustomers();
+    document.querySelector('#order-upload-panel').hidden = !canUpload;
+    if (canUpload) loadCustomerMaster();
+    const isSalesman = currentUser?.role === 'horeca_iss_ds';
+    const salesmanInput = document.querySelector('#order-salesman');
+    if (isSalesman) salesmanInput.value = currentUser.fullName;
+    salesmanInput.readOnly = isSalesman;
+    for (const id of [...orderQuantities.keys()]) {
+      if (!stock.some(item => item.id === id)) orderQuantities.delete(id);
+    }
+    renderOrderStock();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+function openOrdersPage() {
+  if (!ordersInitialized) {
+    ordersInitialized = true;
+    initializeOrdersInterface();
+  }
+  currentOrderChannel = document.querySelector('#order-channel').value;
+  setOrderError();
+  const dateInput = document.querySelector('#order-date');
+  if (!dateInput.value) dateInput.value = getLocalDateValue();
+  loadOrderLookups();
+  loadOrders();
+}
+
 function initializeK4Interface() {
   if (document.querySelector('#profitability-k4-report')) return;
   const today = getLocalDateValue();
@@ -1322,9 +1590,11 @@ function showDashboardPage(page) {
   const isProfitability = page === 'profitability' && (isAdmin || isManagerUpload);
   const isAtDamages = page === 'at-damages' && ['admin', 'manager'].includes(currentUser?.role);
   const isK4 = page === 'k4' && isAdmin;
+  const isOrders = ['horeca', 'iss'].includes(page) && ['admin', 'manager', 'horeca_iss_ds'].includes(currentUser?.role);
   const isAtArea = isAtStock || isAtAssignment || isAtDamages;
   const isProfitabilityArea = isProfitability || isAtArea || isK4;
-  document.querySelector('#overview').hidden = isProfitabilityArea;
+  document.querySelector('#overview').hidden = isProfitabilityArea || isOrders;
+  document.querySelector('#orders').hidden = !isOrders;
   document.querySelector('#profitability').hidden = !isProfitabilityArea;
   document.querySelector('#profitability-at-stock-report').hidden = !isAtStock;
   document.querySelector('#profitability-at-assignment-report').hidden = !isAtAssignment;
@@ -1344,10 +1614,10 @@ function showDashboardPage(page) {
   document.querySelector('#profitability-sku-report > .page-footer').hidden = isManagerUpload;
   document.querySelector('#import-profit-costs').closest('.profitability-import-card').hidden = isManagerUpload;
   document.querySelector('#profitability-rfa-report').hidden = isAtArea || isK4 || isManagerUpload || document.querySelector('#profitability-rfa-tab-button').getAttribute('aria-selected') !== 'true';
-  document.querySelector('.day-picker').hidden = isProfitabilityArea;
-  exportButton.hidden = isProfitabilityArea || currentUser?.role === 'delivery_partner';
+  document.querySelector('.day-picker').hidden = isProfitabilityArea || isOrders;
+  exportButton.hidden = isProfitabilityArea || isOrders || currentUser?.role === 'delivery_partner';
   document.querySelector('.breadcrumbs strong').textContent =
-    isAtArea ? 'AT & BC' : isK4 ? 'K4' : isProfitability ? 'Profitability' : 'Deliveries';
+    isOrders ? 'HORECA & ISS' : isAtArea ? 'AT & BC' : isK4 ? 'K4' : isProfitability ? 'Profitability' : 'Deliveries';
   const profitabilityHeading = document.querySelector('#profitability .page-heading h1');
   profitabilityHeading.innerHTML = isK4 ? 'K4 delivery <span>receivable.</span>' : isManagerUpload ? 'Sales register <span>upload.</span>' : isAtDamages ? 'AT Damages <span>register.</span>' : isAtAssignment ? 'AT Assignment <span>by agent.</span>' : isAtStock ? 'AT Stock <span>management.</span>' : 'Profitability <span>reports.</span>';
   document.querySelector('#profitability .page-heading .eyebrow').innerHTML = isK4
@@ -1374,10 +1644,12 @@ function showDashboardPage(page) {
       ? isProfitability
       : link.id === 'at-stock-link'
         ? isAtArea
+          : link.id === 'horeca-link' || link.id === 'iss-link'
+          ? isOrders && link.id === `${page}-link`
         : link.id === 'k4-link'
           ? isK4
         : link.id === 'deliveries-link'
-          ? !isProfitabilityArea
+          ? !isProfitabilityArea && !isOrders
           : false;
     link.classList.toggle('active', isActive);
     if (isActive) link.setAttribute('aria-current', 'page');
@@ -2192,7 +2464,10 @@ document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
     event.preventDefault();
     let page = link.id === 'at-stock-link' ? 'at-stock'
       : link.id === 'k4-link' ? 'k4'
+      : link.id === 'horeca-link' ? 'horeca'
+      : link.id === 'iss-link' ? 'iss'
       : link.id === 'profitability-link' ? 'profitability' : 'deliveries';
+    if (['horeca', 'iss'].includes(page) && !['admin', 'manager', 'horeca_iss_ds'].includes(currentUser?.role)) return;
     if (page === 'profitability' && !['admin', 'manager'].includes(currentUser?.role)) return;
     if (page === 'k4' && currentUser?.role !== 'admin') return;
     if (['at-stock', 'at-assignment', 'at-damages'].includes(page) && !['admin', 'manager'].includes(currentUser?.role)) return;
@@ -2203,6 +2478,7 @@ document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
     }
     if (page === 'profitability') { loadBillTracker(); loadUploadLock(); }
     if (page === 'k4') openK4Page();
+    if (page === 'horeca') openOrdersPage();
     if (page === 'at-stock') loadAtStockReport();
     if (page === 'at-assignment') loadAtAssignmentReport();
     if (page === 'at-damages') loadAtDamages();
@@ -2274,6 +2550,7 @@ document.querySelector('#export-rfa-report').addEventListener('click', () => {
 exportButton.addEventListener('click', exportSelectedDay);
 async function initializeDashboard() {
   await loadCurrentUser();
+  if (currentUser.role === 'horeca_iss_ds') return;
   await loadDeliveryPartners();
   await loadDeliveries();
   if (['admin', 'manager'].includes(currentUser.role)) loadBillTracker('deliveries');

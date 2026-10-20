@@ -159,6 +159,45 @@ async function initDb() {
       vehicle_amount REAL NOT NULL DEFAULT 0,
       PRIMARY KEY (company_id, expense_date)
     );
+    CREATE TABLE IF NOT EXISTS sales_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      outlet_name TEXT NOT NULL,
+      salesman TEXT NOT NULL DEFAULT '',
+      order_date TEXT NOT NULL,
+      channel TEXT NOT NULL DEFAULT 'HORECA' CHECK (channel IN ('HORECA', 'ISS')),
+      status TEXT NOT NULL DEFAULT 'New' CHECK (status IN ('New', 'Confirmed', 'Delivered', 'Cancelled')),
+      notes TEXT NOT NULL DEFAULT '',
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS sales_order_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id INTEGER NOT NULL REFERENCES sales_orders(id) ON DELETE CASCADE,
+      item_name TEXT NOT NULL,
+      qty INTEGER NOT NULL CHECK (qty > 0)
+    );
+    CREATE TABLE IF NOT EXISTS order_stock (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      item_code TEXT NOT NULL DEFAULT '',
+      item_name TEXT NOT NULL COLLATE NOCASE,
+      rate REAL NOT NULL CHECK (rate >= 0),
+      stock_qty INTEGER NOT NULL DEFAULT 0 CHECK (stock_qty >= 0),
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (company_id, item_name)
+    );
+    CREATE TABLE IF NOT EXISTS order_customers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name TEXT NOT NULL COLLATE NOCASE,
+      channel TEXT NOT NULL DEFAULT '' CHECK (channel IN ('', 'HORECA', 'ISS')),
+      salesman TEXT NOT NULL DEFAULT '' COLLATE NOCASE,
+      address TEXT NOT NULL DEFAULT '',
+      UNIQUE (company_id, name, channel)
+    );
+    CREATE INDEX IF NOT EXISTS sales_orders_by_company_date
+      ON sales_orders(company_id, order_date);
     CREATE INDEX IF NOT EXISTS profitability_sales_period
       ON profitability_sales(company_id, sales_date);
     CREATE UNIQUE INDEX IF NOT EXISTS profitability_product_costs_by_code
@@ -301,6 +340,47 @@ async function initDb() {
   }
   if (!userColumns.some(column => column.name === 'email')) {
     await db.exec('ALTER TABLE users ADD COLUMN email TEXT');
+  }
+
+  const salesOrderColumns = await db.all('PRAGMA table_info(sales_orders)');
+  if (!salesOrderColumns.some(column => column.name === 'channel')) {
+    await db.exec("ALTER TABLE sales_orders ADD COLUMN channel TEXT NOT NULL DEFAULT 'HORECA'");
+  }
+  const orderCustomerColumns = await db.all('PRAGMA table_info(order_customers)');
+  if (!orderCustomerColumns.some(column => column.name === 'beat')) {
+    await db.exec("ALTER TABLE order_customers ADD COLUMN beat TEXT NOT NULL DEFAULT '' COLLATE NOCASE");
+  }
+  const orderStockColumns = await db.all('PRAGMA table_info(order_stock)');
+  if (!orderStockColumns.some(column => column.name === 'base_rate')) {
+    await db.exec('ALTER TABLE order_stock ADD COLUMN base_rate REAL NOT NULL DEFAULT 0');
+    await db.exec('ALTER TABLE order_stock ADD COLUMN gst_amount REAL NOT NULL DEFAULT 0');
+  }
+  const salesOrderItemColumns = await db.all('PRAGMA table_info(sales_order_items)');
+  if (!salesOrderItemColumns.some(column => column.name === 'rate')) {
+    await db.exec('ALTER TABLE sales_order_items ADD COLUMN rate REAL NOT NULL DEFAULT 0');
+  }
+
+  const roleUserTable = await db.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'");
+  if (!roleUserTable.sql.includes("'horeca_iss_ds'")) {
+    const updatedSql = roleUserTable.sql
+      .replace("'delivery_partner')", "'delivery_partner', 'horeca_iss_ds')")
+      .replace(/CREATE TABLE\s+(IF NOT EXISTS\s+)?"?users"?/i, 'CREATE TABLE users_updated');
+    await db.exec('PRAGMA foreign_keys = OFF');
+    await db.exec('BEGIN IMMEDIATE');
+    try {
+      await db.exec(updatedSql);
+      await db.exec('INSERT INTO users_updated SELECT * FROM users');
+      await db.exec('DROP TABLE users');
+      await db.exec('ALTER TABLE users_updated RENAME TO users');
+      await db.exec('COMMIT');
+    } catch (error) {
+      await db.exec('ROLLBACK');
+      throw error;
+    } finally {
+      await db.exec('PRAGMA foreign_keys = ON');
+    }
+    await db.exec('CREATE INDEX IF NOT EXISTS users_company_id ON users(company_id)');
+    await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users(email COLLATE NOCASE) WHERE email IS NOT NULL');
   }
 
   const profitabilitySalesColumns = await db.all('PRAGMA table_info(profitability_sales)');
