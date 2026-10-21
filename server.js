@@ -1117,7 +1117,7 @@ app.get('/api/orders', requireOrderAccess, async (req, res) => {
     let grandTotal = 0;
     for (const order of orders) {
       order.items = await db.all(
-        'SELECT item_name AS itemName, qty, rate FROM sales_order_items WHERE order_id = ? ORDER BY id',
+        'SELECT id, item_name AS itemName, qty, rate FROM sales_order_items WHERE order_id = ? ORDER BY id',
         [order.id]
       );
       order.total = order.items.reduce((sum, item) => sum + item.qty * item.rate, 0);
@@ -1203,21 +1203,22 @@ app.get('/api/orders/export', requireOrderManager, async (req, res) => {
   }
   try {
     const lines = await req.app.locals.db.all(
-      `SELECT o.id, o.outlet_code AS outletCode, o.outlet_name AS outletName, o.salesman,
+      `SELECT o.id, o.status, o.outlet_code AS outletCode, o.outlet_name AS outletName, o.salesman,
               i.item_code AS itemCode, i.item_name AS itemName, i.qty
        FROM sales_orders o JOIN sales_order_items i ON i.order_id = o.id
-       WHERE o.company_id = ? AND o.order_date = ? AND o.channel = ? AND o.status IN ('Confirmed', 'Delivered')
+       WHERE o.company_id = ? AND o.order_date = ? AND o.channel = ?
        ORDER BY o.outlet_name COLLATE NOCASE, o.id, i.id`,
       [req.user.companyId, date, channel]
     );
     if (!lines.length) {
-      return res.status(404).json({ error: 'There are no approved orders for this date to export.' });
+      return res.status(404).json({ error: 'There are no orders for this date to export.' });
     }
+    const statusLabels = { New: 'Pending approval', Confirmed: 'Approved', Delivered: 'Delivered', Cancelled: 'Rejected / Cancelled' };
     const rows = [
-      ['Order No', 'Order Date', 'Channel', 'Salesman', 'Outlet ID', 'Outlet Name', 'Item Code', 'Item Name', 'Qty (M)'],
-      ...lines.map(line => [line.id, date, channel, line.salesman, line.outletCode, line.outletName, line.itemCode, line.itemName, line.qty])
+      ['Order No', 'Order Date', 'Channel', 'Status', 'Salesman', 'Outlet ID', 'Outlet Name', 'Item Code', 'Item Name', 'Qty (M)'],
+      ...lines.map(line => [line.id, date, channel, statusLabels[line.status] || line.status, line.salesman, line.outletCode, line.outletName, line.itemCode, line.itemName, line.qty])
     ];
-    const workbook = createWorkbook([{ name: 'Approved Orders', rows, autoFilterRow: 1 }]);
+    const workbook = createWorkbook([{ name: 'Orders', rows, autoFilterRow: 1 }]);
     res.set({
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'Content-Disposition': `attachment; filename="Orders-${channel}-${date}.xlsx"`,
@@ -1228,6 +1229,38 @@ app.get('/api/orders/export', requireOrderManager, async (req, res) => {
   } catch (error) {
     console.error('Could not export orders:', error);
     res.status(500).json({ error: 'Could not export orders. Please try again.' });
+  }
+});
+
+app.patch('/api/orders/:id/items', requireOrderManager, async (req, res) => {
+  const updates = Array.isArray(req.body?.items) ? req.body.items : [];
+  if (!updates.length) return res.status(400).json({ error: 'No quantities to update.' });
+  const db = req.app.locals.db;
+  let transactionOpen = false;
+  try {
+    const order = await db.get('SELECT id FROM sales_orders WHERE id = ? AND company_id = ?', [req.params.id, req.user.companyId]);
+    if (!order) return res.status(404).json({ error: 'Order not found.' });
+    await db.exec('BEGIN IMMEDIATE');
+    transactionOpen = true;
+    for (const update of updates) {
+      const itemId = Number(update?.id);
+      const qty = Math.round(Number(update?.qty) * 1000) / 1000;
+      if (!Number.isInteger(itemId) || !Number.isFinite(qty) || qty < 0 || qty > 100000) {
+        throw Object.assign(new Error('Enter valid quantities in M (0 removes an item).'), { client: true });
+      }
+      if (qty === 0) await db.run('DELETE FROM sales_order_items WHERE id = ? AND order_id = ?', [itemId, order.id]);
+      else await db.run('UPDATE sales_order_items SET qty = ? WHERE id = ? AND order_id = ?', [qty, itemId, order.id]);
+    }
+    const remaining = await db.get('SELECT COUNT(*) AS count FROM sales_order_items WHERE order_id = ?', [order.id]);
+    if (!remaining.count) throw Object.assign(new Error('An order needs at least one item. Cancel the order instead.'), { client: true });
+    await db.exec('COMMIT');
+    transactionOpen = false;
+    res.json({ ok: true });
+  } catch (error) {
+    if (transactionOpen) await db.exec('ROLLBACK').catch(() => {});
+    if (error.client) return res.status(400).json({ error: error.message });
+    console.error('Could not update order quantities:', error);
+    res.status(500).json({ error: 'Could not update the quantities.' });
   }
 });
 

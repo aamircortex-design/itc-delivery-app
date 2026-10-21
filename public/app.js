@@ -1011,7 +1011,11 @@ async function loadOrders() {
         <td>${order.id}</td>
         <td>${escapeHtml(order.outletName)}${order.notes ? `<br><small>${escapeHtml(order.notes)}</small>` : ''}</td>
         <td>${escapeHtml(order.salesman)}</td>
-        <td>${order.items.map(item => `${escapeHtml(item.itemName)} × ${item.qty} M @ ${formatMoney(item.rate)}/M`).join('<br>')}</td>
+        <td>${canChangeStatus
+          ? `${order.items.map(item => `<label class="order-qty-edit">${escapeHtml(item.itemName)}
+              <input type="number" min="0" step="0.001" inputmode="decimal" value="${item.qty}" data-order-item="${item.id}"> M</label>`).join('')}
+            <button class="button button-secondary" type="button" data-save-qty="${order.id}">Save quantities</button>`
+          : order.items.map(item => `${escapeHtml(item.itemName)} × ${item.qty} M @ ${formatMoney(item.rate)}/M`).join('<br>')}</td>
         <td>${formatMoney(order.total)}</td>
         <td>${canChangeStatus
           ? `<select data-order-status="${order.id}">${Object.entries(statusLabels)
@@ -1117,6 +1121,23 @@ function initializeOrdersInterface() {
     const date = document.querySelector('#order-date').value || getLocalDateValue();
     downloadExcelReport(`/api/orders/export?date=${encodeURIComponent(date)}&channel=${currentOrderChannel}`,
       `Orders-${currentOrderChannel}-${date}.xlsx`, event.currentTarget);
+  });
+  document.querySelector('#orders-rows').addEventListener('click', async event => {
+    const button = event.target.closest('[data-save-qty]');
+    if (!button) return;
+    const items = [...button.closest('td').querySelectorAll('[data-order-item]')]
+      .map(input => ({ id: Number(input.dataset.orderItem), qty: Number(input.value) }));
+    try {
+      await requestJson(`/api/orders/${button.dataset.saveQty}/items`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items })
+      });
+      showToast('Quantities updated.');
+    } catch (error) {
+      showToast(error.message, true);
+    }
+    loadOrders();
   });
   document.querySelector('#orders-rows').addEventListener('change', async event => {
     const select = event.target.closest('[data-order-status]');

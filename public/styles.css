@@ -500,3 +500,5 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .order-catalog{max-height:55vh;overflow-y:auto;margin-bottom:12px}
 .order-catalog thead th{position:sticky;top:0;background:#fff;z-index:1}
 .order-catalog input[type=number]{width:96px;min-height:40px;font-size:16px}
+.order-qty-edit{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+.order-qty-edit input{width:90px;min-height:36px}
