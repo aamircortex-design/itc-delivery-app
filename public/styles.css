@@ -502,3 +502,22 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .order-catalog input[type=number]{width:96px;min-height:40px;font-size:16px}
 .order-qty-edit{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
 .order-qty-edit input{width:90px;min-height:36px}
+.orders-filters{display:flex;flex-wrap:wrap;gap:8px;padding:0 16px 12px}
+.orders-filters input{flex:1 1 220px;min-height:40px;font-size:16px}
+.orders-filters select{min-height:40px}
+.orders-accordion{padding:0 16px 16px;display:flex;flex-direction:column;gap:8px;max-height:70vh;overflow-y:auto}
+.order-card{border:1px solid #e2e8f0;border-radius:10px;background:#fff}
+.order-card summary{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 14px;cursor:pointer;font-weight:600;list-style:none}
+.order-card summary::-webkit-details-marker{display:none}
+.order-card summary::before{content:'\25B8';margin-right:8px}
+.order-card[open] summary::before{content:'\25BE'}
+.order-card-name{flex:1}
+.order-card[open] summary{border-bottom:1px solid #e2e8f0}
+.order-card-body{padding:12px 14px}
+.order-card-meta{margin:0 0 8px;color:#475569;font-size:.9rem}
+.order-line{padding:4px 0}
+.order-card-actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-top:10px}
+.order-status{font-weight:600}
+.order-status-new{color:#b45309}
+.order-status-confirmed,.order-status-delivered{color:#15803d}
+.order-status-cancelled{color:#b91c1c}

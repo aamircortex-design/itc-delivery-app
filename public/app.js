@@ -996,33 +996,54 @@ function renderOrderCustomers() {
   if (customers.some(customer => String(customer.id) === selected)) select.value = selected;
 }
 
+let loadedOrders = [];
+const ORDER_STATUS_LABELS = { New: 'Pending approval', Confirmed: 'Approved', Delivered: 'Delivered', Cancelled: 'Rejected / Cancelled' };
+
+function renderOrderCards() {
+  const canChangeStatus = ['admin', 'manager'].includes(currentUser?.role);
+  const container = document.querySelector('#orders-rows');
+  const openIds = new Set([...container.querySelectorAll('details[open]')].map(card => card.dataset.orderId));
+  const search = document.querySelector('#orders-search').value.trim().toLowerCase();
+  const status = document.querySelector('#orders-status-filter').value;
+  const orders = loadedOrders.filter(order =>
+    (!status || order.status === status) &&
+    (!search || `${order.outletName} ${order.salesman}`.toLowerCase().includes(search)));
+  const active = orders.filter(order => order.status !== 'Cancelled');
+  document.querySelector('#orders-summary').textContent =
+    `${active.length} order${active.length === 1 ? '' : 's'} · ${formatMoney(active.reduce((sum, order) => sum + order.total, 0))}`;
+  document.querySelector('#orders-empty').hidden = orders.length > 0;
+  container.innerHTML = orders.map(order => `
+    <details class="order-card" data-order-id="${order.id}"${openIds.has(String(order.id)) ? ' open' : ''}>
+      <summary>
+        <span class="order-card-name">${escapeHtml(order.outletName)}</span>
+        <span class="order-card-total">${formatMoney(order.total)}</span>
+      </summary>
+      <div class="order-card-body">
+        <p class="order-card-meta">Order #${order.id} · ${escapeHtml(order.channel)} · ${escapeHtml(order.salesman || 'No salesman')} ·
+          <span class="order-status order-status-${order.status.toLowerCase()}">${ORDER_STATUS_LABELS[order.status] || order.status}</span></p>
+        ${order.notes ? `<p class="order-card-meta">${escapeHtml(order.notes)}</p>` : ''}
+        ${canChangeStatus
+          ? `${order.items.map(item => `<label class="order-qty-edit"><span>${escapeHtml(item.itemName)} <small>@ ${formatMoney(item.rate)}/M</small></span>
+              <span><input type="number" min="0" step="0.001" inputmode="decimal" value="${item.qty}" data-order-item="${item.id}"> M</span></label>`).join('')}
+            <div class="order-card-actions">
+              <label>Status <select data-order-status="${order.id}">${Object.entries(ORDER_STATUS_LABELS)
+                .map(([value, label]) => `<option value="${value}"${value === order.status ? ' selected' : ''}>${label}</option>`).join('')}</select></label>
+              <button class="button button-secondary" type="button" data-save-qty="${order.id}">Save quantities</button>
+            </div>`
+          : order.items.map(item => `<div class="order-line">${escapeHtml(item.itemName)} × ${item.qty} M @ ${formatMoney(item.rate)}/M</div>`).join('')}
+      </div>
+    </details>`).join('');
+}
+
 async function loadOrders() {
   const date = document.querySelector('#order-date').value || getLocalDateValue();
   document.querySelector('#orders-list-date').textContent = formatDate(date);
   const canChangeStatus = ['admin', 'manager'].includes(currentUser?.role);
-  const statusLabels = { New: 'Pending approval', Confirmed: 'Approved', Delivered: 'Delivered', Cancelled: 'Rejected / Cancelled' };
   document.querySelector('#export-orders').hidden = !canChangeStatus;
   document.querySelector('#export-orders-comparison').hidden = !canChangeStatus;
   try {
-    const { orders, summary } = await requestJson(`/api/orders?date=${encodeURIComponent(date)}&channel=ALL`);
-    document.querySelector('#orders-empty').hidden = orders.length > 0;
-    document.querySelector('#orders-summary').textContent = `${summary.count} order${summary.count === 1 ? '' : 's'} · ${formatMoney(summary.total)}`;
-    document.querySelector('#orders-rows').innerHTML = orders.map(order => `
-      <tr>
-        <td>${order.id}</td>
-        <td>${escapeHtml(order.outletName)} <small>(${escapeHtml(order.channel)})</small>${order.notes ? `<br><small>${escapeHtml(order.notes)}</small>` : ''}</td>
-        <td>${escapeHtml(order.salesman)}</td>
-        <td>${canChangeStatus
-          ? `${order.items.map(item => `<label class="order-qty-edit">${escapeHtml(item.itemName)}
-              <input type="number" min="0" step="0.001" inputmode="decimal" value="${item.qty}" data-order-item="${item.id}"> M</label>`).join('')}
-            <button class="button button-secondary" type="button" data-save-qty="${order.id}">Save quantities</button>`
-          : order.items.map(item => `${escapeHtml(item.itemName)} × ${item.qty} M @ ${formatMoney(item.rate)}/M`).join('<br>')}</td>
-        <td>${formatMoney(order.total)}</td>
-        <td>${canChangeStatus
-          ? `<select data-order-status="${order.id}">${Object.entries(statusLabels)
-            .map(([status, label]) => `<option value="${status}"${status === order.status ? ' selected' : ''}>${label}</option>`).join('')}</select>`
-          : escapeHtml(statusLabels[order.status] || order.status)}</td>
-      </tr>`).join('');
+    ({ orders: loadedOrders } = await requestJson(`/api/orders?date=${encodeURIComponent(date)}&channel=ALL`));
+    renderOrderCards();
   } catch (error) {
     showToast(error.message, true);
   }
@@ -1117,6 +1138,8 @@ function initializeOrdersInterface() {
     uploadOrderFile('customers', event.currentTarget.files[0]);
     event.currentTarget.value = '';
   });
+  document.querySelector('#orders-search').addEventListener('input', renderOrderCards);
+  document.querySelector('#orders-status-filter').addEventListener('change', renderOrderCards);
   document.querySelector('#order-date').addEventListener('change', loadOrders);
   document.querySelector('#export-orders-comparison').addEventListener('click', event => {
     const date = document.querySelector('#order-date').value || getLocalDateValue();
@@ -1131,7 +1154,7 @@ function initializeOrdersInterface() {
   document.querySelector('#orders-rows').addEventListener('click', async event => {
     const button = event.target.closest('[data-save-qty]');
     if (!button) return;
-    const items = [...button.closest('td').querySelectorAll('[data-order-item]')]
+    const items = [...button.closest('.order-card-body').querySelectorAll('[data-order-item]')]
       .map(input => ({ id: Number(input.dataset.orderItem), qty: Number(input.value) }));
     try {
       await requestJson(`/api/orders/${button.dataset.saveQty}/items`, {

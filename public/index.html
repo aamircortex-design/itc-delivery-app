@@ -253,12 +253,17 @@
           </section>
           <section class="deliveries-panel orders-panel">
             <div class="panel-header"><h2>Orders for <span id="orders-list-date"></span> · <span id="orders-summary"></span></h2><button class="button button-secondary" id="export-orders" type="button" hidden>Export orders (Excel)</button><button class="button button-secondary" id="export-orders-comparison" type="button" hidden>Ordered vs billed (Excel)</button></div>
-            <div class="table-scroll">
-              <table>
-                <thead><tr><th>#</th><th>Outlet</th><th>Salesman</th><th>Items</th><th>Total</th><th>Status</th></tr></thead>
-                <tbody id="orders-rows"></tbody>
-              </table>
+            <div class="orders-filters">
+              <input id="orders-search" type="search" placeholder="Search customer or salesman" autocomplete="off">
+              <select id="orders-status-filter" aria-label="Filter by status">
+                <option value="">All statuses</option>
+                <option value="New">Pending approval</option>
+                <option value="Confirmed">Approved</option>
+                <option value="Delivered">Delivered</option>
+                <option value="Cancelled">Rejected / Cancelled</option>
+              </select>
             </div>
+            <div class="orders-accordion" id="orders-rows"></div>
             <p class="at-stock-empty" id="orders-empty" hidden>No orders for this date.</p>
           </section>
         </div>
