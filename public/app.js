@@ -1004,13 +1004,13 @@ async function loadOrders() {
   document.querySelector('#export-orders').hidden = !canChangeStatus;
   document.querySelector('#export-orders-comparison').hidden = !canChangeStatus;
   try {
-    const { orders, summary } = await requestJson(`/api/orders?date=${encodeURIComponent(date)}&channel=${currentOrderChannel}`);
+    const { orders, summary } = await requestJson(`/api/orders?date=${encodeURIComponent(date)}&channel=ALL`);
     document.querySelector('#orders-empty').hidden = orders.length > 0;
     document.querySelector('#orders-summary').textContent = `${summary.count} order${summary.count === 1 ? '' : 's'} · ${formatMoney(summary.total)}`;
     document.querySelector('#orders-rows').innerHTML = orders.map(order => `
       <tr>
         <td>${order.id}</td>
-        <td>${escapeHtml(order.outletName)}${order.notes ? `<br><small>${escapeHtml(order.notes)}</small>` : ''}</td>
+        <td>${escapeHtml(order.outletName)} <small>(${escapeHtml(order.channel)})</small>${order.notes ? `<br><small>${escapeHtml(order.notes)}</small>` : ''}</td>
         <td>${escapeHtml(order.salesman)}</td>
         <td>${canChangeStatus
           ? `${order.items.map(item => `<label class="order-qty-edit">${escapeHtml(item.itemName)}

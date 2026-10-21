@@ -1098,20 +1098,25 @@ app.get('/api/orders', requireOrderAccess, async (req, res) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return res.status(400).json({ error: 'Choose a valid date.' });
   }
-  if (!ORDER_CHANNELS.includes(channel)) {
+  if (channel !== 'ALL' && !ORDER_CHANNELS.includes(channel)) {
     return res.status(400).json({ error: 'Choose HORECA or ISS.' });
   }
   try {
     const db = req.app.locals.db;
-    const params = [req.user.companyId, date, channel];
+    const params = [req.user.companyId, date];
+    let channelFilter = '';
+    if (channel !== 'ALL') {
+      channelFilter = 'AND channel = ?';
+      params.push(channel);
+    }
     let ownerFilter = '';
     if (req.user.role === 'horeca_iss_ds') {
       ownerFilter = 'AND created_by = ?';
       params.push(req.user.id);
     }
     const orders = await db.all(
-      `SELECT id, outlet_name AS outletName, salesman, order_date AS orderDate, status, notes, created_at AS createdAt
-       FROM sales_orders WHERE company_id = ? AND order_date = ? AND channel = ? ${ownerFilter} ORDER BY id DESC`,
+      `SELECT id, channel, outlet_name AS outletName, salesman, order_date AS orderDate, status, notes, created_at AS createdAt
+       FROM sales_orders WHERE company_id = ? AND order_date = ? ${channelFilter} ${ownerFilter} ORDER BY id DESC`,
       params
     );
     let grandTotal = 0;
