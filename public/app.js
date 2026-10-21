@@ -999,7 +999,9 @@ function renderOrderCustomers() {
 async function loadOrders() {
   const date = document.querySelector('#order-date').value || getLocalDateValue();
   document.querySelector('#orders-list-date').textContent = formatDate(date);
-  const canChangeStatus = currentUser?.role === 'admin';
+  const canChangeStatus = ['admin', 'manager'].includes(currentUser?.role);
+  const statusLabels = { New: 'Pending approval', Confirmed: 'Approved', Delivered: 'Delivered', Cancelled: 'Rejected / Cancelled' };
+  document.querySelector('#export-orders').hidden = !canChangeStatus;
   try {
     const { orders, summary } = await requestJson(`/api/orders?date=${encodeURIComponent(date)}&channel=${currentOrderChannel}`);
     document.querySelector('#orders-empty').hidden = orders.length > 0;
@@ -1012,9 +1014,9 @@ async function loadOrders() {
         <td>${order.items.map(item => `${escapeHtml(item.itemName)} × ${item.qty} M @ ${formatMoney(item.rate)}/M`).join('<br>')}</td>
         <td>${formatMoney(order.total)}</td>
         <td>${canChangeStatus
-          ? `<select data-order-status="${order.id}">${['New', 'Confirmed', 'Delivered', 'Cancelled']
-            .map(status => `<option${status === order.status ? ' selected' : ''}>${status}</option>`).join('')}</select>`
-          : escapeHtml(order.status)}</td>
+          ? `<select data-order-status="${order.id}">${Object.entries(statusLabels)
+            .map(([status, label]) => `<option value="${status}"${status === order.status ? ' selected' : ''}>${label}</option>`).join('')}</select>`
+          : escapeHtml(statusLabels[order.status] || order.status)}</td>
       </tr>`).join('');
   } catch (error) {
     showToast(error.message, true);
@@ -1111,6 +1113,11 @@ function initializeOrdersInterface() {
     event.currentTarget.value = '';
   });
   document.querySelector('#order-date').addEventListener('change', loadOrders);
+  document.querySelector('#export-orders').addEventListener('click', event => {
+    const date = document.querySelector('#order-date').value || getLocalDateValue();
+    downloadExcelReport(`/api/orders/export?date=${encodeURIComponent(date)}&channel=${currentOrderChannel}`,
+      `Orders-${currentOrderChannel}-${date}.xlsx`, event.currentTarget);
+  });
   document.querySelector('#orders-rows').addEventListener('change', async event => {
     const select = event.target.closest('[data-order-status]');
     if (!select) return;

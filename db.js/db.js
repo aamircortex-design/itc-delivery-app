@@ -350,6 +350,14 @@ async function initDb() {
   if (!orderCustomerColumns.some(column => column.name === 'beat')) {
     await db.exec("ALTER TABLE order_customers ADD COLUMN beat TEXT NOT NULL DEFAULT '' COLLATE NOCASE");
   }
+  if (!orderCustomerColumns.some(column => column.name === 'customer_code')) {
+    await db.exec("ALTER TABLE order_customers ADD COLUMN customer_code TEXT NOT NULL DEFAULT ''");
+  }
+  if (!salesOrderColumns.some(column => column.name === 'outlet_code')) {
+    await db.exec("ALTER TABLE sales_orders ADD COLUMN outlet_code TEXT NOT NULL DEFAULT ''");
+    await db.exec('ALTER TABLE sales_orders ADD COLUMN approved_by INTEGER');
+    await db.exec('ALTER TABLE sales_orders ADD COLUMN approved_at TEXT');
+  }
   const orderStockColumns = await db.all('PRAGMA table_info(order_stock)');
   if (!orderStockColumns.some(column => column.name === 'base_rate')) {
     await db.exec('ALTER TABLE order_stock ADD COLUMN base_rate REAL NOT NULL DEFAULT 0');
@@ -358,6 +366,9 @@ async function initDb() {
   const salesOrderItemColumns = await db.all('PRAGMA table_info(sales_order_items)');
   if (!salesOrderItemColumns.some(column => column.name === 'rate')) {
     await db.exec('ALTER TABLE sales_order_items ADD COLUMN rate REAL NOT NULL DEFAULT 0');
+  }
+  if (!salesOrderItemColumns.some(column => column.name === 'item_code')) {
+    await db.exec("ALTER TABLE sales_order_items ADD COLUMN item_code TEXT NOT NULL DEFAULT ''");
   }
 
   const roleUserTable = await db.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'");

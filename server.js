@@ -871,7 +871,7 @@ function requireOrderAccess(req, res, next) {
 
 function requireOrderManager(req, res, next) {
   if (!isOrderManager(req.user)) {
-    return res.status(403).json({ error: 'Only administrators and managers can upload order data.' });
+    return res.status(403).json({ error: 'Only administrators and managers can approve and export orders.' });
   }
   next();
 }
@@ -960,6 +960,7 @@ app.post('/api/orders/stock', requireOrderAdmin, upload.single('file'), async (r
 const CUSTOMER_NAME_ALIASES = ['customername', 'customer', 'outletname', 'outlet', 'name', 'storename'];
 const CUSTOMER_SALESMAN_ALIASES = ['salesman', 'salesmanname', 'salesperson', 'salesrep', 'dsname', 'ds'];
 const CUSTOMER_CHANNEL_ALIASES = ['channel', 'channeltype', 'type', 'segment'];
+const CUSTOMER_CODE_ALIASES = ['customercode', 'outletcode', 'outletid', 'customerid', 'retailercode'];
 const CUSTOMER_ADDRESS_ALIASES = ['address', 'location', 'area'];
 const CUSTOMER_BEAT_ALIASES = ['beat', 'beatname', 'route', 'routename'];
 
@@ -1015,6 +1016,7 @@ app.post('/api/orders/customers', requireOrderAdmin, upload.single('file'), asyn
     const channelCol = pickColumn(headers, CUSTOMER_CHANNEL_ALIASES);
     const addressCol = pickColumn(headers, CUSTOMER_ADDRESS_ALIASES);
     const beatCol = pickColumn(headers, CUSTOMER_BEAT_ALIASES);
+    const codeCol = pickColumn(headers, CUSTOMER_CODE_ALIASES);
 
     const customers = new Map();
     rows.slice(headerIndex + 1).forEach((row, index) => {
@@ -1031,6 +1033,7 @@ app.post('/api/orders/customers', requireOrderAdmin, upload.single('file'), asyn
         name,
         channel,
         beat,
+        code: codeCol === -1 ? '' : String(row[codeCol] ?? '').trim().slice(0, 50),
         salesman: salesmanCol === -1 ? '' : String(row[salesmanCol] ?? '').trim().slice(0, 100),
         address: addressCol === -1 ? '' : String(row[addressCol] ?? '').trim().slice(0, 300)
       });
@@ -1042,8 +1045,8 @@ app.post('/api/orders/customers', requireOrderAdmin, upload.single('file'), asyn
     await db.run('DELETE FROM order_customers WHERE company_id = ?', [req.user.companyId]);
     for (const customer of customers.values()) {
       await db.run(
-        'INSERT INTO order_customers         (company_id, name, channel, salesman, address, beat) VALUES (?, ?, ?, ?, ?, ?)',
-                [req.user.companyId, customer.name, customer.channel, customer.salesman, customer.address, customer.beat]
+        'INSERT INTO order_customers (company_id, name, channel, salesman, address, beat, customer_code) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [req.user.companyId, customer.name, customer.channel, customer.salesman, customer.address, customer.beat, customer.code]
       );
     }
     await db.exec('COMMIT');
@@ -1065,7 +1068,7 @@ async function getVisibleCustomers(db, user, channel) {
     params.push(user.fullName, user.userId);
   }
   return db.all(
-    `SELECT id, name, address, beat FROM order_customers
+    `SELECT id, name, address, beat, customer_code AS code FROM order_customers
      WHERE company_id = ? AND channel IN ('', ?) ${salesmanFilter} ORDER BY name COLLATE NOCASE`,
     params
   );
@@ -1163,22 +1166,22 @@ app.post('/api/orders', requireOrderAccess, async (req, res) => {
     const lines = [];
     for (const [stockId, qty] of quantities) {
       const stock = await db.get(
-        'SELECT id, item_name AS itemName, rate FROM order_stock WHERE id = ? AND company_id = ?',
+        'SELECT id, item_code AS itemCode, item_name AS itemName, rate FROM order_stock WHERE id = ? AND company_id = ?',
         [stockId, req.user.companyId]
       );
       if (!stock) throw Object.assign(new Error('An item is no longer in the price list. Refresh and try again.'), { client: true });
-      lines.push({ itemName: stock.itemName, rate: stock.rate, qty });
+      lines.push({ itemCode: stock.itemCode, itemName: stock.itemName, rate: stock.rate, qty });
     }
     const salesman = req.user.role === 'horeca_iss_ds' ? req.user.fullName : String(req.body?.salesman || '').trim().slice(0, 100);
     const result = await db.run(
-      `INSERT INTO sales_orders (company_id, channel, outlet_name, salesman, order_date, notes, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [req.user.companyId, channel, customer.name, salesman, orderDate, notes, req.user.id]
+      `INSERT INTO sales_orders (company_id, channel, outlet_name, outlet_code, salesman, order_date, notes, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [req.user.companyId, channel, customer.name, customer.code, salesman, orderDate, notes, req.user.id]
     );
     for (const line of lines) {
       await db.run(
-        'INSERT INTO sales_order_items (order_id, item_name, qty, rate) VALUES (?, ?, ?, ?)',
-        [result.lastID, line.itemName, line.qty, line.rate]
+        'INSERT INTO sales_order_items (order_id, item_code, item_name, qty, rate) VALUES (?, ?, ?, ?, ?)',
+        [result.lastID, line.itemCode, line.itemName, line.qty, line.rate]
       );
     }
     await db.exec('COMMIT');
@@ -1192,7 +1195,43 @@ app.post('/api/orders', requireOrderAccess, async (req, res) => {
   }
 });
 
-app.patch('/api/orders/:id/status', requireOrderAdmin, async (req, res) => {
+app.get('/api/orders/export', requireOrderManager, async (req, res) => {
+  const date = String(req.query.date || '');
+  const channel = String(req.query.channel || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !ORDER_CHANNELS.includes(channel)) {
+    return res.status(400).json({ error: 'Choose a valid date and channel.' });
+  }
+  try {
+    const lines = await req.app.locals.db.all(
+      `SELECT o.id, o.outlet_code AS outletCode, o.outlet_name AS outletName, o.salesman,
+              i.item_code AS itemCode, i.item_name AS itemName, i.qty
+       FROM sales_orders o JOIN sales_order_items i ON i.order_id = o.id
+       WHERE o.company_id = ? AND o.order_date = ? AND o.channel = ? AND o.status IN ('Confirmed', 'Delivered')
+       ORDER BY o.outlet_name COLLATE NOCASE, o.id, i.id`,
+      [req.user.companyId, date, channel]
+    );
+    if (!lines.length) {
+      return res.status(404).json({ error: 'There are no approved orders for this date to export.' });
+    }
+    const rows = [
+      ['Order No', 'Order Date', 'Channel', 'Salesman', 'Outlet ID', 'Outlet Name', 'Item Code', 'Item Name', 'Qty (M)'],
+      ...lines.map(line => [line.id, date, channel, line.salesman, line.outletCode, line.outletName, line.itemCode, line.itemName, line.qty])
+    ];
+    const workbook = createWorkbook([{ name: 'Approved Orders', rows, autoFilterRow: 1 }]);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="Orders-${channel}-${date}.xlsx"`,
+      'Content-Length': workbook.length,
+      'Cache-Control': 'no-store'
+    });
+    res.send(Buffer.from(workbook));
+  } catch (error) {
+    console.error('Could not export orders:', error);
+    res.status(500).json({ error: 'Could not export orders. Please try again.' });
+  }
+});
+
+app.patch('/api/orders/:id/status', requireOrderManager, async (req, res) => {
   const status = String(req.body?.status || '');
   if (!ORDER_STATUSES.includes(status)) return res.status(400).json({ error: 'Choose a valid status.' });
   const db = req.app.locals.db;
@@ -1206,7 +1245,11 @@ app.patch('/api/orders/:id/status', requireOrderAdmin, async (req, res) => {
       transactionOpen = false;
       return res.status(404).json({ error: 'Order not found.' });
     }
-    await db.run('UPDATE sales_orders SET status = ? WHERE id = ?', [status, order.id]);
+    const approving = ['Confirmed', 'Delivered'].includes(status);
+    await db.run(
+      'UPDATE sales_orders SET status = ?, approved_by = ?, approved_at = ? WHERE id = ?',
+      [status, approving ? req.user.id : null, approving ? new Date().toISOString() : null, order.id]
+    );
     await db.exec('COMMIT');
     transactionOpen = false;
     res.json({ ok: true });
