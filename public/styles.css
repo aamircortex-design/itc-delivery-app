@@ -494,3 +494,9 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .orders-form,.orders-panel .panel-header{padding:16px}
 .orders-form label{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
 .orders-form textarea{width:100%}
+.order-brand-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.order-chip{border:1px solid #cbd5e1;background:#fff;border-radius:999px;padding:8px 14px;font:inherit;cursor:pointer;min-height:40px}
+.order-chip.active{background:#0f766e;border-color:#0f766e;color:#fff}
+.order-catalog{max-height:55vh;overflow-y:auto;margin-bottom:12px}
+.order-catalog thead th{position:sticky;top:0;background:#fff;z-index:1}
+.order-catalog input[type=number]{width:96px;min-height:40px;font-size:16px}

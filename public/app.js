@@ -940,44 +940,50 @@ function updateOrderTotal() {
   document.querySelector('#order-line-count').textContent = `${lines} item${lines === 1 ? '' : 's'}`;
 }
 
-function renderOrderStock() {
-  document.querySelector('#order-item-list').innerHTML = orderStock
-    .map(item => `<option value="${escapeHtml(item.itemName)}">${formatMoney(item.rate)} / M</option>`).join('');
-  const added = orderStock.filter(item => orderQuantities.has(item.id));
-  document.querySelector('#order-stock-empty').hidden = added.length > 0;
-  document.querySelector('#order-stock-rows').innerHTML = added.map(item => `
-    <tr>
-      <td>${escapeHtml(item.itemName)}${item.itemCode ? `<br><small>${escapeHtml(item.itemCode)}</small>` : ''}</td>
-      <td>${formatMoney(item.baseRate)}</td>
-      <td>${formatMoney(item.gstAmount)}</td>
-      <td>${formatMoney(item.rate)}</td>
-      <td><input type="number" min="0.001" step="0.001" inputmode="decimal" data-stock-id="${item.id}"
-        value="${orderQuantities.get(item.id)}" aria-label="Quantity of ${escapeHtml(item.itemName)}"></td>
-      <td data-line-total="${item.id}"></td>
-      <td><button class="button button-secondary" type="button" data-remove-item="${item.id}">Remove</button></td>
-    </tr>`).join('');
-  updateOrderTotal();
+const ORDER_BRANDS = [
+  ['Gold Flake', /gold\s*fl|^gf|\bgfk\b|flake/i],
+  ['Classic', /classic|^cl\b|classsic|iking/i],
+  ['American Club', /american|^am\s*club|amclub/i],
+  ['B&H', /^b&h/i],
+  ['Scissors', /scissors/i],
+  ['Wave', /^wave/i],
+  ['NC', /^nc\b/i]
+];
+let orderBrand = 'All';
+
+function orderBrandOf(item) {
+  const found = ORDER_BRANDS.find(([, pattern]) => pattern.test(item.itemName));
+  return found ? found[0] : 'Others';
 }
 
-function addOrderItem() {
-  const nameInput = document.querySelector('#order-item');
-  const qtyInput = document.querySelector('#order-item-qty');
-  const item = orderStock.find(entry => entry.itemName.toLowerCase() === nameInput.value.trim().toLowerCase());
-  const qty = Math.round(Number(qtyInput.value) * 1000) / 1000;
-  if (!item) {
-    setOrderError('Choose an item from the list.');
-    return;
-  }
-  if (!(qty > 0)) {
-    setOrderError('Enter a quantity in M greater than 0.');
-    return;
-  }
-  setOrderError();
-  orderQuantities.set(item.id, Math.round(((orderQuantities.get(item.id) || 0) + qty) * 1000) / 1000);
-  nameInput.value = '';
-  qtyInput.value = '';
-  renderOrderStock();
-  nameInput.focus();
+function renderOrderChips() {
+  const brands = [...new Set(orderStock.map(orderBrandOf))];
+  const orderedCount = orderQuantities.size;
+  const chips = ['All', ...(orderedCount ? ['Ordered'] : []), ...brands];
+  if (!chips.includes(orderBrand)) orderBrand = 'All';
+  document.querySelector('#order-brand-chips').innerHTML = chips.map(brand => {
+    const label = brand === 'Ordered' ? `Ordered (${orderedCount})` : brand;
+    return `<button type="button" class="order-chip${brand === orderBrand ? ' active' : ''}" data-brand="${escapeHtml(brand)}">${escapeHtml(label)}</button>`;
+  }).join('');
+}
+
+function renderOrderStock() {
+  renderOrderChips();
+  const search = document.querySelector('#order-search').value.trim().toLowerCase();
+  const rows = orderStock.filter(item => {
+    if (orderBrand === 'Ordered' ? !orderQuantities.has(item.id) : orderBrand !== 'All' && orderBrandOf(item) !== orderBrand) return false;
+    return !search || `${item.itemName} ${item.itemCode}`.toLowerCase().includes(search);
+  });
+  document.querySelector('#order-stock-empty').hidden = rows.length > 0;
+  document.querySelector('#order-stock-rows').innerHTML = rows.map(item => `
+    <tr>
+      <td>${escapeHtml(item.itemName)}${item.itemCode ? `<br><small>${escapeHtml(item.itemCode)}</small>` : ''}</td>
+      <td>${formatMoney(item.rate)}</td>
+      <td><input type="number" min="0" step="0.001" inputmode="decimal" data-stock-id="${item.id}" placeholder="0"
+        value="${orderQuantities.get(item.id) || ''}" aria-label="Quantity of ${escapeHtml(item.itemName)}"></td>
+      <td data-line-total="${item.id}"></td>
+    </tr>`).join('');
+  updateOrderTotal();
 }
 
 function renderOrderCustomers() {
@@ -1071,17 +1077,11 @@ async function clearOrderMaster(kind, label) {
 function initializeOrdersInterface() {
   document.querySelector('#clear-stock-master').addEventListener('click', () => clearOrderMaster('stock', 'item master'));
   document.querySelector('#clear-customer-master').addEventListener('click', () => clearOrderMaster('customers', 'customer master'));
-  document.querySelector('#order-add-item').addEventListener('click', addOrderItem);
-  document.querySelector('#order-item-qty').addEventListener('keydown', event => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      addOrderItem();
-    }
-  });
-  document.querySelector('#order-stock-rows').addEventListener('click', event => {
-    const button = event.target.closest('[data-remove-item]');
-    if (!button) return;
-    orderQuantities.delete(Number(button.dataset.removeItem));
+  document.querySelector('#order-search').addEventListener('input', renderOrderStock);
+  document.querySelector('#order-brand-chips').addEventListener('click', event => {
+    const chip = event.target.closest('[data-brand]');
+    if (!chip) return;
+    orderBrand = chip.dataset.brand;
     renderOrderStock();
   });
   document.querySelector('#order-beat').addEventListener('change', renderOrderCustomers);
@@ -1099,6 +1099,7 @@ function initializeOrdersInterface() {
     const qty = Math.round(Number(input.value) * 1000) / 1000;
     if (qty > 0) orderQuantities.set(Number(input.dataset.stockId), qty);
     else orderQuantities.delete(Number(input.dataset.stockId));
+    renderOrderChips();
     updateOrderTotal();
   });
   document.querySelector('#order-stock-file').addEventListener('change', event => {
