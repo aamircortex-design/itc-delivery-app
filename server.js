@@ -1202,18 +1202,17 @@ app.post('/api/orders', requireOrderAccess, async (req, res) => {
 
 app.get('/api/orders/export', requireOrderManager, async (req, res) => {
   const date = String(req.query.date || '');
-  const channel = String(req.query.channel || '');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !ORDER_CHANNELS.includes(channel)) {
-    return res.status(400).json({ error: 'Choose a valid date and channel.' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'Choose a valid date.' });
   }
   try {
     const lines = await req.app.locals.db.all(
-      `SELECT o.id, o.status, o.outlet_code AS outletCode, o.outlet_name AS outletName, o.salesman,
+      `SELECT o.id, o.status, o.channel, o.outlet_code AS outletCode, o.outlet_name AS outletName, o.salesman,
               i.item_code AS itemCode, i.item_name AS itemName, i.qty
        FROM sales_orders o JOIN sales_order_items i ON i.order_id = o.id
-       WHERE o.company_id = ? AND o.order_date = ? AND o.channel = ?
-       ORDER BY o.outlet_name COLLATE NOCASE, o.id, i.id`,
-      [req.user.companyId, date, channel]
+       WHERE o.company_id = ? AND o.order_date = ?
+       ORDER BY o.channel, o.outlet_name COLLATE NOCASE, o.id, i.id`,
+      [req.user.companyId, date]
     );
     if (!lines.length) {
       return res.status(404).json({ error: 'There are no orders for this date to export.' });
@@ -1221,12 +1220,12 @@ app.get('/api/orders/export', requireOrderManager, async (req, res) => {
     const statusLabels = { New: 'Pending approval', Confirmed: 'Approved', Delivered: 'Delivered', Cancelled: 'Rejected / Cancelled' };
     const rows = [
       ['Order No', 'Order Date', 'Channel', 'Status', 'Salesman', 'Outlet ID', 'Outlet Name', 'Item Code', 'Item Name', 'Qty (M)'],
-      ...lines.map(line => [line.id, date, channel, statusLabels[line.status] || line.status, line.salesman, line.outletCode, line.outletName, line.itemCode, line.itemName, line.qty])
+      ...lines.map(line => [line.id, date, line.channel, statusLabels[line.status] || line.status, line.salesman, line.outletCode, line.outletName, line.itemCode, line.itemName, line.qty])
     ];
     const workbook = createWorkbook([{ name: 'Orders', rows, autoFilterRow: 1 }]);
     res.set({
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': `attachment; filename="Orders-${channel}-${date}.xlsx"`,
+      'Content-Disposition': `attachment; filename="Orders-${date}.xlsx"`,
       'Content-Length': workbook.length,
       'Cache-Control': 'no-store'
     });
@@ -1239,19 +1238,18 @@ app.get('/api/orders/export', requireOrderManager, async (req, res) => {
 
 app.get('/api/orders/comparison', requireOrderManager, async (req, res) => {
   const date = String(req.query.date || '');
-  const channel = String(req.query.channel || '');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !ORDER_CHANNELS.includes(channel)) {
-    return res.status(400).json({ error: 'Choose a valid date and channel.' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'Choose a valid date.' });
   }
   try {
     const db = req.app.locals.db;
     const ordered = await db.all(
-      `SELECT o.outlet_code AS outletCode, o.outlet_name AS outletName, i.item_code AS itemCode,
+      `SELECT o.channel, o.outlet_code AS outletCode, o.outlet_name AS outletName, i.item_code AS itemCode,
               i.item_name AS itemName, SUM(i.qty) AS qty
        FROM sales_orders o JOIN sales_order_items i ON i.order_id = o.id
-       WHERE o.company_id = ? AND o.order_date = ? AND o.channel = ? AND o.status != 'Cancelled'
+       WHERE o.company_id = ? AND o.order_date = ? AND o.status != 'Cancelled'
        GROUP BY lower(trim(o.outlet_name)), lower(trim(i.item_code)), i.item_name`,
-      [req.user.companyId, date, channel]
+      [req.user.companyId, date]
     );
     if (!ordered.length) return res.status(404).json({ error: 'There are no orders for this date to compare.' });
     const billed = await db.all(
@@ -1284,13 +1282,13 @@ app.get('/api/orders/comparison', requireOrderManager, async (req, res) => {
             : !line.billedQty ? 'Not billed'
             : difference === 0 ? 'Fully billed'
             : difference < 0 ? 'Short billed' : 'Over billed';
-          return [date, channel, line.outletCode, line.outletName, line.itemCode, line.itemName, round(line.orderedQty), round(line.billedQty), difference, remark];
+          return [date, line.channel || '', line.outletCode, line.outletName, line.itemCode, line.itemName, round(line.orderedQty), round(line.billedQty), difference, remark];
         })
     ];
     const workbook = createWorkbook([{ name: 'Ordered vs Billed', rows, autoFilterRow: 1 }]);
     res.set({
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': `attachment; filename="Ordered-vs-Billed-${channel}-${date}.xlsx"`,
+      'Content-Disposition': `attachment; filename="Ordered-vs-Billed-${date}.xlsx"`,
       'Content-Length': workbook.length,
       'Cache-Control': 'no-store'
     });

@@ -1120,13 +1120,13 @@ function initializeOrdersInterface() {
   document.querySelector('#order-date').addEventListener('change', loadOrders);
   document.querySelector('#export-orders-comparison').addEventListener('click', event => {
     const date = document.querySelector('#order-date').value || getLocalDateValue();
-    downloadExcelReport(`/api/orders/comparison?date=${encodeURIComponent(date)}&channel=${currentOrderChannel}`,
-      `Ordered-vs-Billed-${currentOrderChannel}-${date}.xlsx`, event.currentTarget);
+    downloadExcelReport(`/api/orders/comparison?date=${encodeURIComponent(date)}`,
+      `Ordered-vs-Billed-${date}.xlsx`, event.currentTarget);
   });
   document.querySelector('#export-orders').addEventListener('click', event => {
     const date = document.querySelector('#order-date').value || getLocalDateValue();
-    downloadExcelReport(`/api/orders/export?date=${encodeURIComponent(date)}&channel=${currentOrderChannel}`,
-      `Orders-${currentOrderChannel}-${date}.xlsx`, event.currentTarget);
+    downloadExcelReport(`/api/orders/export?date=${encodeURIComponent(date)}`,
+      `Orders-${date}.xlsx`, event.currentTarget);
   });
   document.querySelector('#orders-rows').addEventListener('click', async event => {
     const button = event.target.closest('[data-save-qty]');
