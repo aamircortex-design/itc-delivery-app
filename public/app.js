@@ -1002,6 +1002,7 @@ async function loadOrders() {
   const canChangeStatus = ['admin', 'manager'].includes(currentUser?.role);
   const statusLabels = { New: 'Pending approval', Confirmed: 'Approved', Delivered: 'Delivered', Cancelled: 'Rejected / Cancelled' };
   document.querySelector('#export-orders').hidden = !canChangeStatus;
+  document.querySelector('#export-orders-comparison').hidden = !canChangeStatus;
   try {
     const { orders, summary } = await requestJson(`/api/orders?date=${encodeURIComponent(date)}&channel=${currentOrderChannel}`);
     document.querySelector('#orders-empty').hidden = orders.length > 0;
@@ -1117,6 +1118,11 @@ function initializeOrdersInterface() {
     event.currentTarget.value = '';
   });
   document.querySelector('#order-date').addEventListener('change', loadOrders);
+  document.querySelector('#export-orders-comparison').addEventListener('click', event => {
+    const date = document.querySelector('#order-date').value || getLocalDateValue();
+    downloadExcelReport(`/api/orders/comparison?date=${encodeURIComponent(date)}&channel=${currentOrderChannel}`,
+      `Ordered-vs-Billed-${currentOrderChannel}-${date}.xlsx`, event.currentTarget);
+  });
   document.querySelector('#export-orders').addEventListener('click', event => {
     const date = document.querySelector('#order-date').value || getLocalDateValue();
     downloadExcelReport(`/api/orders/export?date=${encodeURIComponent(date)}&channel=${currentOrderChannel}`,

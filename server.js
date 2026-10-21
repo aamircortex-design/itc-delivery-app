@@ -1232,6 +1232,70 @@ app.get('/api/orders/export', requireOrderManager, async (req, res) => {
   }
 });
 
+app.get('/api/orders/comparison', requireOrderManager, async (req, res) => {
+  const date = String(req.query.date || '');
+  const channel = String(req.query.channel || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !ORDER_CHANNELS.includes(channel)) {
+    return res.status(400).json({ error: 'Choose a valid date and channel.' });
+  }
+  try {
+    const db = req.app.locals.db;
+    const ordered = await db.all(
+      `SELECT o.outlet_code AS outletCode, o.outlet_name AS outletName, i.item_code AS itemCode,
+              i.item_name AS itemName, SUM(i.qty) AS qty
+       FROM sales_orders o JOIN sales_order_items i ON i.order_id = o.id
+       WHERE o.company_id = ? AND o.order_date = ? AND o.channel = ? AND o.status != 'Cancelled'
+       GROUP BY lower(trim(o.outlet_name)), lower(trim(i.item_code)), i.item_name`,
+      [req.user.companyId, date, channel]
+    );
+    if (!ordered.length) return res.status(404).json({ error: 'There are no orders for this date to compare.' });
+    const billed = await db.all(
+      `SELECT outlet_name AS outletName, item_code AS itemCode, item_name AS itemName, SUM(quantity) AS qty
+       FROM profitability_sales WHERE company_id = ? AND sales_date = ? AND quantity > 0
+         AND lower(trim(item_code)) IN (SELECT lower(trim(item_code)) FROM order_stock WHERE company_id = ? AND item_code != '')
+       GROUP BY lower(trim(outlet_name)), lower(trim(item_code)), item_name`,
+      [req.user.companyId, date, req.user.companyId]
+    );
+    const key = (outlet, code) => `${outlet.trim().toLowerCase()}|${code.trim().toLowerCase()}`;
+    const lines = new Map();
+    for (const row of ordered) {
+      lines.set(key(row.outletName, row.itemCode), { ...row, orderedQty: row.qty, billedQty: 0 });
+    }
+    const orderedOutlets = new Set(ordered.map(row => row.outletName.trim().toLowerCase()));
+    for (const row of billed) {
+      if (!orderedOutlets.has(row.outletName.trim().toLowerCase())) continue;
+      const k = key(row.outletName, row.itemCode);
+      if (lines.has(k)) lines.get(k).billedQty += row.qty;
+      else lines.set(k, { outletCode: '', outletName: row.outletName, itemCode: row.itemCode, itemName: row.itemName, orderedQty: 0, billedQty: row.qty });
+    }
+    const round = value => Math.round(value * 1000) / 1000;
+    const rows = [
+      ['Date', 'Channel', 'Outlet ID', 'Outlet Name', 'Item Code', 'Item Name', 'Ordered Qty (M)', 'Billed Qty (M)', 'Difference (M)', 'Remark'],
+      ...[...lines.values()]
+        .sort((a, b) => a.outletName.localeCompare(b.outletName) || a.itemName.localeCompare(b.itemName))
+        .map(line => {
+          const difference = round(line.billedQty - line.orderedQty);
+          const remark = !line.orderedQty ? 'Billed, not ordered'
+            : !line.billedQty ? 'Not billed'
+            : difference === 0 ? 'Fully billed'
+            : difference < 0 ? 'Short billed' : 'Over billed';
+          return [date, channel, line.outletCode, line.outletName, line.itemCode, line.itemName, round(line.orderedQty), round(line.billedQty), difference, remark];
+        })
+    ];
+    const workbook = createWorkbook([{ name: 'Ordered vs Billed', rows, autoFilterRow: 1 }]);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="Ordered-vs-Billed-${channel}-${date}.xlsx"`,
+      'Content-Length': workbook.length,
+      'Cache-Control': 'no-store'
+    });
+    res.send(Buffer.from(workbook));
+  } catch (error) {
+    console.error('Could not export comparison:', error);
+    res.status(500).json({ error: 'Could not export the comparison. Please try again.' });
+  }
+});
+
 app.patch('/api/orders/:id/items', requireOrderManager, async (req, res) => {
   const updates = Array.isArray(req.body?.items) ? req.body.items : [];
   if (!updates.length) return res.status(400).json({ error: 'No quantities to update.' });
