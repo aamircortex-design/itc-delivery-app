@@ -489,7 +489,9 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .at-removal-form label { display: grid; gap: 4px; font-weight: 600; }
 .at-removal-form textarea { font: inherit; padding: 8px; border: 1px solid #d5dbd7; border-radius: 6px; }
 
-.orders-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:12px}
+.orders-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:12px}
+.orders-form input[type="date"]{width:140px;min-height:34px;height:34px;padding:4px 8px;font-size:.9rem}
+.orders-form #order-search{max-width:280px;min-height:34px;height:34px;padding:4px 8px;font-size:.9rem}
 .orders-add-item{align-items:end}
 .orders-form,.orders-panel .panel-header{padding:16px}
 .orders-form label{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
@@ -527,7 +529,13 @@ td { height: 67px; padding: 8px 13px; border-top: 1px solid #f0f2f0; color: #556
 .orders-tab[hidden]{display:none}
 .weekly-visits-help{padding:0 16px;color:#475569}
 .weekly-visits-filters label{display:flex;flex-direction:column;gap:4px}
-.weekly-visits-filters input,.weekly-visits-filters select{min-height:40px}
+.weekly-visits-filters{align-items:flex-end}
+.weekly-visits-filters label{font-size:.8rem;color:#475569;flex:0 0 auto}
+.weekly-visits-filters input,.weekly-visits-filters select{min-height:34px;height:34px;padding:4px 8px;font-size:.9rem;width:auto;max-width:100%;box-sizing:border-box}
+.weekly-visits-filters label input,.weekly-visits-filters label select{flex:none;width:auto}
+.weekly-visits-filters input[type="date"],.weekly-visits-filters input[type="week"]{width:130px}
+.weekly-visits-filters input[type="search"]{flex:1 1 180px;min-width:150px;max-width:280px;width:auto}
+.weekly-visits-filters .button{height:34px;min-height:34px;padding:0 12px}
 .weekly-visits-list{display:flex;flex-direction:column;gap:10px;padding:0 16px 16px}
 .weekly-visit-card{border:1px solid #e2e8f0;border-radius:10px;background:#fff;padding:14px}
 .weekly-visit-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
