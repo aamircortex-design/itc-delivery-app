@@ -219,6 +219,42 @@
               <p class="page-subtitle">Record outlet orders as salesmen place them and track their status.</p>
             </div>
           </section>
+          <div class="orders-tabs" role="tablist" aria-label="HORECA and ISS activities">
+            <button class="orders-tab active" type="button" role="tab" aria-selected="true" data-orders-tab="orders">Order taking</button>
+            <button class="orders-tab" type="button" role="tab" aria-selected="false" data-orders-tab="visits" id="weekly-visits-tab">Weekly shop check-in</button>
+            <button class="orders-tab" type="button" role="tab" aria-selected="false" data-orders-tab="report" id="visit-report-tab" hidden>Shop check-ins</button>
+          </div>
+          <section class="deliveries-panel orders-panel" id="visit-report-panel" hidden>
+            <div class="panel-header"><h2>Shop check-ins</h2><span id="report-summary">0 visited</span></div>
+            <p class="weekly-visits-help">See, day by day, where each salesman checked in, whether he was at the shop, and the outcome of the visit.</p>
+            <div class="orders-filters weekly-visits-filters">
+              <label>Date <input id="report-date" type="date" required></label>
+              <label>Salesman
+                <select id="report-salesman"><option value="">All salesmen</option></select>
+              </label>
+              <label>Channel
+                <select id="report-channel">
+                  <option value="ALL">All channels</option>
+                  <option value="HORECA">HORECA</option>
+                  <option value="ISS">ISS</option>
+                </select>
+              </label>
+              <label>Show
+                <select id="report-filter">
+                  <option value="all">All visits</option>
+                  <option value="away">Not at shop</option>
+                  <option value="order_taken">Order taken</option>
+                  <option value="outstanding_not_cleared">Outstanding not cleared</option>
+                  <option value="order_not_given">Order not given</option>
+                </select>
+              </label>
+              <input id="report-search" type="search" placeholder="Search outlet, beat or salesman" autocomplete="off">
+              <button class="button button-secondary" type="button" id="export-visits">Export Excel</button>
+            </div>
+            <p class="at-stock-empty" id="report-empty" hidden>No outlets match.</p>
+            <div class="weekly-visits-list" id="report-list"></div>
+          </section>
+          <div id="orders-tab-orders">
           <section class="deliveries-panel orders-panel">
             <form id="order-form" class="orders-form">
               <div class="dialog-error" id="order-error" role="alert" hidden></div>
@@ -265,6 +301,24 @@
             </div>
             <div class="orders-accordion" id="orders-rows"></div>
             <p class="at-stock-empty" id="orders-empty" hidden>No orders for this date.</p>
+          </section>
+          </div>
+          <section class="deliveries-panel orders-panel" id="weekly-visits-panel" hidden>
+            <div class="panel-header"><h2>Weekly shop check-in</h2><span id="visit-summary">0 of 0 checked in</span></div>
+            <p class="weekly-visits-help">Record each customer’s visit outcome once per week. The first saved visit captures and locks the outlet location; every later visit is checked against it (within 150 m) and reported to your manager.</p>
+            <div class="orders-filters weekly-visits-filters">
+              <label>Week <input id="visit-week" type="week" required></label>
+              <label>Channel
+                <select id="visit-channel">
+                  <option value="ALL">All channels</option>
+                  <option value="HORECA">HORECA</option>
+                  <option value="ISS">ISS</option>
+                </select>
+              </label>
+              <input id="visit-search" type="search" placeholder="Search customer or beat" autocomplete="off">
+            </div>
+            <p class="at-stock-empty" id="visit-empty" hidden>No assigned customers found for this week.</p>
+            <div class="weekly-visits-list" id="weekly-visits-list"></div>
           </section>
         </div>
 

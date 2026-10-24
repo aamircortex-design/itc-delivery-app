@@ -194,7 +194,27 @@ async function initDb() {
       channel TEXT NOT NULL DEFAULT '' CHECK (channel IN ('', 'HORECA', 'ISS')),
       salesman TEXT NOT NULL DEFAULT '' COLLATE NOCASE,
       address TEXT NOT NULL DEFAULT '',
+      location_lat REAL,
+      location_lng REAL,
+      location_captured_at TEXT,
+      location_captured_by INTEGER,
       UNIQUE (company_id, name, channel)
+    );
+    CREATE TABLE IF NOT EXISTS order_store_visits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      customer_id INTEGER NOT NULL REFERENCES order_customers(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      week_key TEXT NOT NULL,
+      outcome TEXT NOT NULL CHECK (outcome IN ('order_taken', 'outstanding_not_cleared', 'order_not_given')),
+      outstanding_amount REAL NOT NULL DEFAULT 0 CHECK (outstanding_amount >= 0),
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      visit_lat REAL,
+      visit_lng REAL,
+      distance_m REAL,
+      location_status TEXT,
+      visit_date TEXT,
+      UNIQUE (company_id, customer_id, user_id, week_key)
     );
     CREATE INDEX IF NOT EXISTS sales_orders_by_company_date
       ON sales_orders(company_id, order_date);
@@ -352,6 +372,25 @@ async function initDb() {
   }
   if (!orderCustomerColumns.some(column => column.name === 'customer_code')) {
     await db.exec("ALTER TABLE order_customers ADD COLUMN customer_code TEXT NOT NULL DEFAULT ''");
+  }
+  const storeVisitColumns = await db.all('PRAGMA table_info(order_store_visits)');
+  for (const [name, type] of [['visit_lat', 'REAL'], ['visit_lng', 'REAL'], ['distance_m', 'REAL'],   ['location_status', 'TEXT'], ['visit_date', 'TEXT']]) {
+    if (!storeVisitColumns.some(column => column.name === name)) {
+      await db.exec(`ALTER TABLE order_store_visits ADD COLUMN ${name} ${type}`);
+    }
+  }
+    await db.exec("UPDATE order_store_visits SET visit_date = date(updated_at, '+330 minutes') WHERE visit_date IS NULL");
+  if (!orderCustomerColumns.some(column => column.name === 'location_lat')) {
+    await db.exec('ALTER TABLE order_customers ADD COLUMN location_lat REAL');
+  }
+  if (!orderCustomerColumns.some(column => column.name === 'location_lng')) {
+    await db.exec('ALTER TABLE order_customers ADD COLUMN location_lng REAL');
+  }
+  if (!orderCustomerColumns.some(column => column.name === 'location_captured_at')) {
+    await db.exec('ALTER TABLE order_customers ADD COLUMN location_captured_at TEXT');
+  }
+  if (!orderCustomerColumns.some(column => column.name === 'location_captured_by')) {
+    await db.exec('ALTER TABLE order_customers ADD COLUMN location_captured_by INTEGER');
   }
   if (!salesOrderColumns.some(column => column.name === 'outlet_code')) {
     await db.exec("ALTER TABLE sales_orders ADD COLUMN outlet_code TEXT NOT NULL DEFAULT ''");

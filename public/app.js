@@ -1049,6 +1049,217 @@ async function loadOrders() {
   }
 }
 
+let weeklyVisitCustomers = [];
+let weeklyVisitDrafts = new Map();
+let visitReportRows = [];
+const visitOutcomeLabels = {
+  order_taken: 'Order taken',
+  outstanding_not_cleared: 'Outstanding not cleared',
+  order_not_given: 'Order not given'
+};
+
+async function loadVisitReport() {
+  const date = document.querySelector('#report-date').value;
+  const channel = document.querySelector('#report-channel').value;
+  if (!date) return;
+  try {
+    const result = await requestJson(`/api/orders/visits/report?date=${encodeURIComponent(date)}&channel=${encodeURIComponent(channel)}`);
+    visitReportRows = result.visits;
+    const select = document.querySelector('#report-salesman');
+    const previous = select.value;
+    const names = [...new Set(visitReportRows.map(row => row.visitedBy))];
+    select.innerHTML = '<option value="">All salesmen</option>' +
+      names.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+    select.value = names.includes(previous) ? previous : '';
+    renderVisitReport();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+function renderVisitReport() {
+  const filter = document.querySelector('#report-filter').value;
+  const salesman = document.querySelector('#report-salesman').value;
+  const search = document.querySelector('#report-search').value.trim().toLowerCase();
+  const rows = visitReportRows.filter(row => {
+    if (salesman && row.visitedBy !== salesman) return false;
+    if (filter === 'away' && row.locationStatus !== 'away') return false;
+    if (visitOutcomeLabels[filter] && row.outcome !== filter) return false;
+    return `${row.customerName} ${row.beat} ${row.visitedBy || ''}`.toLowerCase().includes(search);
+  });
+  const away = rows.filter(row => row.locationStatus === 'away').length;
+  const orders = rows.filter(row => row.outcome === 'order_taken').length;
+  document.querySelector('#report-summary').textContent =
+    `${rows.length} visit${rows.length === 1 ? '' : 's'} · ${orders} order${orders === 1 ? '' : 's'} · ${away} not at shop`;
+  document.querySelector('#report-empty').hidden = rows.length > 0;
+  document.querySelector('#report-list').innerHTML = rows.map(row => {
+    let badge = '<span class="visit-location not-captured">Not visited</span>';
+    if (row.outcome) {
+      badge = row.locationStatus === 'away'
+        ? `<span class="visit-location not-captured">Not at shop · ${Math.round(row.distanceMeters)} m away</span>`
+        : row.locationStatus === 'first_capture'
+          ? '<span class="visit-location captured">Location captured</span>'
+          : '<span class="visit-location captured">At shop</span>';
+    }
+    const outcome = row.outcome
+      ? `${escapeHtml(visitOutcomeLabels[row.outcome])}${row.outcome === 'outstanding_not_cleared' ? ` · ${formatMoney(row.outstandingAmount)}` : ''}`
+      : 'No visit recorded';
+    const links = [
+      row.shopMapUrl ? `<a href="${escapeHtml(row.shopMapUrl)}" target="_blank" rel="noopener noreferrer">Shop location</a>` : '',
+      row.visitMapUrl ? `<a href="${escapeHtml(row.visitMapUrl)}" target="_blank" rel="noopener noreferrer">Visit location</a>` : ''
+    ].filter(Boolean).join(' · ');
+    return `<article class="weekly-visit-card">
+      <div class="weekly-visit-heading">
+        <div><h3>${escapeHtml(row.customerName)}</h3>
+          <p>${escapeHtml(row.beat || 'No beat')} · ${escapeHtml(row.channel || 'Both channels')} · ${escapeHtml(row.visitedBy || row.assignedSalesman || 'No salesman')}</p></div>
+        ${badge}
+      </div>
+      <p class="visit-saved">${outcome}${row.visitedAt ? ` · ${escapeHtml(row.visitedAt)} UTC` : ''}</p>
+      ${links ? `<p class="weekly-visits-help">${links}</p>` : ''}
+    </article>`;
+  }).join('');
+}
+
+function currentIsoWeek() {
+  const localDate = new Date();
+  const date = new Date(Date.UTC(localDate.getFullYear(), localDate.getMonth(), localDate.getDate()));
+  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
+  const year = date.getUTCFullYear();
+  const yearStart = new Date(Date.UTC(year, 0, 1));
+  const week = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+  return `${year}-W${String(week).padStart(2, '0')}`;
+}
+
+function renderWeeklyVisits() {
+  const search = document.querySelector('#visit-search').value.trim().toLowerCase();
+  const checkedIn = weeklyVisitCustomers.filter(customer => customer.visit).length;
+  document.querySelector('#visit-summary').textContent =
+    `${checkedIn} of ${weeklyVisitCustomers.length} customer${weeklyVisitCustomers.length === 1 ? '' : 's'} checked in`;
+  const customers = weeklyVisitCustomers.filter(customer =>
+    `${customer.name} ${customer.beat} ${customer.address}`.toLowerCase().includes(search));
+  const list = document.querySelector('#weekly-visits-list');
+  document.querySelector('#visit-empty').hidden = customers.length > 0;
+  list.innerHTML = customers.map(customer => {
+    const saved = customer.visit;
+    const draft = weeklyVisitDrafts.get(customer.id) || {
+      outcome: saved?.outcome || '',
+      outstandingAmount: saved?.outstandingAmount || ''
+    };
+    const amountRequired = draft.outcome === 'outstanding_not_cleared';
+    const outcomeLabels = {
+      order_taken: 'Order taken',
+      outstanding_not_cleared: 'Outstanding not cleared',
+      order_not_given: 'Order not given'
+    };
+    return `<article class="weekly-visit-card" data-visit-customer="${customer.id}">
+      <div class="weekly-visit-heading">
+        <div><h3>${escapeHtml(customer.name)}</h3>
+          <p>${escapeHtml(customer.beat || 'No beat')} · ${escapeHtml(customer.channel || 'Both channels')}${customer.address ? ` · ${escapeHtml(customer.address)}` : ''}</p></div>
+        <span class="visit-location ${customer.locationCaptured ? 'captured' : 'not-captured'}">
+          ${customer.locationCaptured ? 'Location locked' : 'Location needed on first visit'}
+        </span>
+      </div>
+      ${saved ? `<p class="visit-saved">This week: ${escapeHtml(outcomeLabels[saved.outcome] || saved.outcome)}${saved.outcome === 'outstanding_not_cleared' ? ` · ${formatMoney(saved.outstandingAmount)}` : ''}${saved.locationStatus === 'away' ? ' · Not at shop location' : ''}</p>` : ''}
+      <div class="weekly-visit-controls">
+        <label>Visit outcome
+          <select data-visit-outcome="${customer.id}">
+            <option value="">Choose outcome</option>
+            <option value="order_taken"${draft.outcome === 'order_taken' ? ' selected' : ''}>Order taken</option>
+            <option value="outstanding_not_cleared"${draft.outcome === 'outstanding_not_cleared' ? ' selected' : ''}>Outstanding not cleared</option>
+            <option value="order_not_given"${draft.outcome === 'order_not_given' ? ' selected' : ''}>Order not given</option>
+          </select>
+        </label>
+        <label data-visit-amount-label="${customer.id}"${amountRequired ? '' : ' hidden'}>Outstanding amount
+          <input type="number" min="0.01" max="1000000000" step="0.01" inputmode="decimal"
+            data-visit-amount="${customer.id}" value="${escapeHtml(String(draft.outstandingAmount || ''))}" placeholder="Enter amount">
+        </label>
+        <button class="button button-secondary" type="button" data-save-visit="${customer.id}">${saved ? 'Update this week' : 'Save visit'}</button>
+      </div>
+    </article>`;
+  }).join('');
+}
+
+async function loadWeeklyVisits() {
+  const week = document.querySelector('#visit-week').value;
+  const channel = document.querySelector('#visit-channel').value;
+  try {
+    const result = await requestJson(`/api/orders/visits?week=${encodeURIComponent(week)}&channel=${encodeURIComponent(channel)}`);
+    weeklyVisitCustomers = result.customers.sort((a, b) =>
+      a.beat.localeCompare(b.beat) || a.name.localeCompare(b.name));
+    weeklyVisitDrafts = new Map(weeklyVisitCustomers.map(customer => [
+      customer.id,
+      {
+        outcome: customer.visit?.outcome || '',
+        outstandingAmount: customer.visit?.outstandingAmount || ''
+      }
+    ]));
+    renderWeeklyVisits();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+function getCurrentOutletLocation() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('This device does not support location capture.'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      position => resolve({ latitude: position.coords.latitude, longitude: position.coords.longitude }),
+      error => {
+        const message = error.code === 1
+          ? 'Location permission was denied. Allow location access in your browser settings to save the first visit.'
+          : error.code === 3
+            ? 'Location capture timed out. Try again in an area with a clearer GPS signal.'
+            : 'Could not get the device location. Check location services and try again.';
+        reject(new Error(message));
+      },
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+    );
+  });
+}
+
+async function saveWeeklyVisit(button) {
+  const customerId = Number(button.dataset.saveVisit);
+  const customer = weeklyVisitCustomers.find(entry => entry.id === customerId);
+  if (!customer) return;
+  const draft = weeklyVisitDrafts.get(customerId) || {};
+  if (!draft.outcome) {
+    showToast('Choose a visit outcome before saving.', true);
+    return;
+  }
+  if (draft.outcome === 'outstanding_not_cleared' &&
+      (!Number.isFinite(Number(draft.outstandingAmount)) || Number(draft.outstandingAmount) <= 0)) {
+    showToast('Enter an outstanding amount greater than zero.', true);
+    return;
+  }
+
+  button.disabled = true;
+  try {
+    const location = await getCurrentOutletLocation();
+    const result = await requestJson('/api/orders/visits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customerId,
+        week: document.querySelector('#visit-week').value,
+        channel: document.querySelector('#visit-channel').value,
+        outcome: draft.outcome,
+        outstandingAmount: draft.outcome === 'outstanding_not_cleared' ? Number(draft.outstandingAmount) : 0,
+        ...(location || {})
+      })
+    });
+    if (result.locationStatus === 'away') showToast('Visit saved, but you are not at the shop location. Your manager can see this.', true);
+    else showToast(customer.locationCaptured ? 'Weekly visit saved.' : 'Location captured and weekly visit saved.');
+    await loadWeeklyVisits();
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 let customerMaster = [];
 
 function renderCustomerMaster() {
@@ -1103,6 +1314,79 @@ async function clearOrderMaster(kind, label) {
 }
 
 function initializeOrdersInterface() {
+  const weeklyVisitsTab = document.querySelector('#weekly-visits-tab');
+  weeklyVisitsTab.hidden = currentUser?.role !== 'horeca_iss_ds';
+  const isManager = ['admin', 'manager'].includes(currentUser?.role);
+  document.querySelector('#visit-report-tab').hidden = !isManager;
+  document.querySelector('.orders-tabs').addEventListener('click', event => {
+    const button = event.target.closest('[data-orders-tab]');
+    if (!button) return;
+    const tabName = button.dataset.ordersTab;
+    const showVisits = tabName === 'visits' && currentUser?.role === 'horeca_iss_ds';
+    const showReport = tabName === 'report' && isManager;
+    document.querySelector('#orders-tab-orders').hidden = showVisits || showReport;
+    document.querySelector('#weekly-visits-panel').hidden = !showVisits;
+    document.querySelector('#visit-report-panel').hidden = !showReport;
+    document.querySelectorAll('.orders-tab').forEach(tab => {
+      const active = tab === button && (tab.dataset.ordersTab === 'orders' || showVisits || showReport);
+      tab.classList.toggle('active', active);
+      tab.setAttribute('aria-selected', String(active));
+    });
+    if (showVisits) loadWeeklyVisits();
+    if (showReport) {
+      const reportDate = document.querySelector('#report-date');
+      if (!reportDate.value) reportDate.value = new Date().toLocaleDateString('en-CA');
+      loadVisitReport();
+    }
+  });
+  document.querySelector('#report-date').addEventListener('change', loadVisitReport);
+  document.querySelector('#report-channel').addEventListener('change', loadVisitReport);
+  document.querySelector('#report-salesman').addEventListener('change', renderVisitReport);
+  document.querySelector('#report-filter').addEventListener('change', renderVisitReport);
+  document.querySelector('#report-search').addEventListener('input', renderVisitReport);
+  document.querySelector('#export-visits').addEventListener('click', event => {
+    const date = document.querySelector('#report-date').value;
+    if (!date) return showToast('Choose a date to export.', true);
+    const salesman = document.querySelector('#report-salesman').value;
+    downloadExcelReport(`/api/orders/visits/export?${new URLSearchParams({ date, ...(salesman ? { salesman } : {}) })}`, `Shop-Checkins-${date}.xlsx`, event.currentTarget);
+  });
+  document.querySelector('#visit-week').addEventListener('change', loadWeeklyVisits);
+  document.querySelector('#visit-channel').addEventListener('change', loadWeeklyVisits);
+  document.querySelector('#visit-search').addEventListener('input', renderWeeklyVisits);
+  document.querySelector('#weekly-visits-list').addEventListener('change', event => {
+    const outcome = event.target.closest('[data-visit-outcome]');
+    if (outcome) {
+      const customerId = Number(outcome.dataset.visitOutcome);
+      const draft = weeklyVisitDrafts.get(customerId) || { outcome: '', outstandingAmount: '' };
+      draft.outcome = outcome.value;
+      if (outcome.value !== 'outstanding_not_cleared') draft.outstandingAmount = '';
+      weeklyVisitDrafts.set(customerId, draft);
+      const amountLabel = document.querySelector(`[data-visit-amount-label="${customerId}"]`);
+      if (amountLabel) amountLabel.hidden = outcome.value !== 'outstanding_not_cleared';
+      const amountInput = document.querySelector(`[data-visit-amount="${customerId}"]`);
+      if (amountInput && outcome.value !== 'outstanding_not_cleared') amountInput.value = '';
+      return;
+    }
+    const amount = event.target.closest('[data-visit-amount]');
+    if (amount) {
+      const customerId = Number(amount.dataset.visitAmount);
+      const draft = weeklyVisitDrafts.get(customerId) || { outcome: '', outstandingAmount: '' };
+      draft.outstandingAmount = amount.value;
+      weeklyVisitDrafts.set(customerId, draft);
+    }
+  });
+  document.querySelector('#weekly-visits-list').addEventListener('input', event => {
+    const amount = event.target.closest('[data-visit-amount]');
+    if (!amount) return;
+    const customerId = Number(amount.dataset.visitAmount);
+    const draft = weeklyVisitDrafts.get(customerId) || { outcome: '', outstandingAmount: '' };
+    draft.outstandingAmount = amount.value;
+    weeklyVisitDrafts.set(customerId, draft);
+  });
+  document.querySelector('#weekly-visits-list').addEventListener('click', event => {
+    const button = event.target.closest('[data-save-visit]');
+    if (button) saveWeeklyVisit(button);
+  });
   document.querySelector('#clear-stock-master').addEventListener('click', () => clearOrderMaster('stock', 'item master'));
   document.querySelector('#clear-customer-master').addEventListener('click', () => clearOrderMaster('customers', 'customer master'));
   document.querySelector('#order-search').addEventListener('input', renderOrderStock);
@@ -1253,6 +1537,8 @@ function openOrdersPage() {
     initializeOrdersInterface();
   }
   currentOrderChannel = document.querySelector('#order-channel').value;
+  const weekInput = document.querySelector('#visit-week');
+  if (!weekInput.value) weekInput.value = currentIsoWeek();
   setOrderError();
   const dateInput = document.querySelector('#order-date');
   if (!dateInput.value) dateInput.value = getLocalDateValue();

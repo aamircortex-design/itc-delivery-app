@@ -876,6 +876,13 @@ function requireOrderManager(req, res, next) {
   next();
 }
 
+function requireOrderSalesman(req, res, next) {
+  if (req.user.role !== 'horeca_iss_ds') {
+    return res.status(403).json({ error: 'Only salesmen can record weekly shop visits.' });
+  }
+  next();
+}
+
 function requireOrderAdmin(req, res, next) {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Only administrators can upload or view the master data.' });
@@ -1042,12 +1049,34 @@ app.post('/api/orders/customers', requireOrderAdmin, upload.single('file'), asyn
 
     await db.exec('BEGIN IMMEDIATE');
     transactionOpen = true;
-    await db.run('DELETE FROM order_customers WHERE company_id = ?', [req.user.companyId]);
+    const retainedCustomerIds = new Set();
     for (const customer of customers.values()) {
-      await db.run(
-        'INSERT INTO order_customers (company_id, name, channel, salesman, address, beat, customer_code) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [req.user.companyId, customer.name, customer.channel, customer.salesman, customer.address, customer.beat, customer.code]
+      const existing = await db.get(
+        'SELECT id FROM order_customers WHERE company_id = ? AND name = ? AND channel = ?',
+        [req.user.companyId, customer.name, customer.channel]
       );
+      if (existing) {
+        await db.run(
+          'UPDATE order_customers SET salesman = ?, address = ?, beat = ?, customer_code = ? WHERE id = ?',
+          [customer.salesman, customer.address, customer.beat, customer.code, existing.id]
+        );
+        retainedCustomerIds.add(existing.id);
+      } else {
+        const result = await db.run(
+          'INSERT INTO order_customers (company_id, name, channel, salesman, address, beat, customer_code) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [req.user.companyId, customer.name, customer.channel, customer.salesman, customer.address, customer.beat, customer.code]
+        );
+        retainedCustomerIds.add(result.lastID);
+      }
+    }
+    const existingCustomers = await db.all(
+      'SELECT id FROM order_customers WHERE company_id = ?',
+      [req.user.companyId]
+    );
+    for (const existing of existingCustomers) {
+      if (!retainedCustomerIds.has(existing.id)) {
+        await db.run('DELETE FROM order_customers WHERE id = ?', [existing.id]);
+      }
     }
     await db.exec('COMMIT');
     transactionOpen = false;
@@ -1061,18 +1090,232 @@ app.post('/api/orders/customers', requireOrderAdmin, upload.single('file'), asyn
 });
 
 async function getVisibleCustomers(db, user, channel) {
-  const params = [user.companyId, channel];
+  const params = channel === 'ALL' ? [user.companyId] : [user.companyId, channel];
+  const channelFilter = channel === 'ALL' ? '' : "AND channel IN ('', ?)";
   let salesmanFilter = '';
   if (user.role === 'horeca_iss_ds') {
     salesmanFilter = 'AND (salesman = ? OR salesman = ?)';
     params.push(user.fullName, user.userId);
   }
   return db.all(
-    `SELECT id, name, address, beat, customer_code AS code FROM order_customers
-     WHERE company_id = ? AND channel IN ('', ?) ${salesmanFilter} ORDER BY name COLLATE NOCASE`,
+    `SELECT id, name, address, beat, channel, customer_code AS code,
+            location_lat AS locationLat, location_lng AS locationLng,
+            location_lat IS NOT NULL AND location_lng IS NOT NULL AS locationCaptured
+     FROM order_customers WHERE company_id = ? ${channelFilter} ${salesmanFilter}
+     ORDER BY name COLLATE NOCASE`,
     params
   );
 }
+
+function isValidOrderWeek(weekKey) {
+  const match = /^(\d{4})-W(\d{2})$/.exec(weekKey);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const week = Number(match[2]);
+  if (week < 1 || week > 53) return false;
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const monday = new Date(jan4);
+  monday.setUTCDate(jan4.getUTCDate() - ((jan4.getUTCDay() + 6) % 7) + (week - 1) * 7);
+  const date = new Date(monday);
+  date.setUTCDate(monday.getUTCDate() + 3);
+  return date.getUTCFullYear() === year;
+}
+
+const VISIT_RADIUS_METERS = 150;
+
+function distanceInMeters(lat1, lng1, lat2, lng2) {
+  const toRad = degrees => degrees * Math.PI / 180;
+  const a = Math.sin(toRad(lat2 - lat1) / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(toRad(lng2 - lng1) / 2) ** 2;
+  return 6371000 * 2 * Math.asin(Math.sqrt(a));
+}
+
+async function getVisitReportRows(db, companyId, date, channel, salesman = '') {
+  const params = [companyId, date];
+  let extraFilter = '';
+  if (channel !== 'ALL') {
+    extraFilter += " AND c.channel IN ('', ?)";
+    params.push(channel);
+  }
+  if (salesman) {
+    extraFilter += ' AND u.full_name = ? COLLATE NOCASE';
+    params.push(salesman);
+  }
+  return db.all(
+    `SELECT c.id AS customerId, c.name AS customerName, c.customer_code AS customerCode, c.beat, c.channel,
+            c.salesman AS assignedSalesman, c.location_lat IS NOT NULL AS locationCaptured,
+            c.location_lat AS shopLat, c.location_lng AS shopLng,
+            v.outcome, v.outstanding_amount AS outstandingAmount, v.updated_at AS visitedAt,
+            v.visit_lat AS visitLat, v.visit_lng AS visitLng, v.distance_m AS distanceMeters,
+            v.location_status AS locationStatus, u.full_name AS visitedBy
+     FROM order_store_visits v
+     JOIN order_customers c ON c.id = v.customer_id AND c.company_id = v.company_id
+     JOIN users u ON u.id = v.user_id
+     WHERE v.company_id = ? AND v.visit_date = ? ${extraFilter}
+     ORDER BY u.full_name COLLATE NOCASE, v.updated_at, c.name COLLATE NOCASE`,
+    params
+  );
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+app.get('/api/orders/visits/report', requireOrderManager, async (req, res) => {
+  const date = String(req.query.date || '');
+  const channel = String(req.query.channel || 'ALL');
+  if (!ISO_DATE.test(date)) return res.status(400).json({ error: 'Choose a valid date.' });
+  if (!['ALL', ...ORDER_CHANNELS].includes(channel)) return res.status(400).json({ error: 'Choose HORECA, ISS or all channels.' });
+  try {
+    const rows = await getVisitReportRows(req.app.locals.db, req.user.companyId, date, channel);
+    res.json({
+      date,
+      radiusMeters: VISIT_RADIUS_METERS,
+      visits: rows.map(({ shopLat, shopLng, visitLat, visitLng, ...row }) => ({
+        ...row,
+        shopMapUrl: shopLat === null ? '' : `https://www.google.com/maps?q=${shopLat},${shopLng}`,
+        visitMapUrl: visitLat === null || visitLat === undefined ? '' : `https://www.google.com/maps?q=${visitLat},${visitLng}`
+      }))
+    });
+  } catch (error) {
+    console.error('Could not load shop check-in report:', error);
+    res.status(500).json({ error: 'Could not load shop check-ins.' });
+  }
+});
+
+app.get('/api/orders/visits/export', requireOrderManager, async (req, res) => {
+  const weekKey = String(req.query.date || '');
+  const salesman = String(req.query.salesman || '');
+  if (!ISO_DATE.test(weekKey)) return res.status(400).json({ error: 'Choose a valid date.' });
+  try {
+    const data = await getVisitReportRows(req.app.locals.db, req.user.companyId, weekKey, 'ALL', salesman);
+    const outcomeLabels = { order_taken: 'Order taken', outstanding_not_cleared: 'Outstanding not cleared', order_not_given: 'Order not given' };
+    const locationLabels = { first_capture: 'Location captured (first visit)', at_shop: 'At shop', away: 'Not at shop' };
+    const rows = [
+      ['Date', 'Beat', 'Outlet ID', 'Outlet Name', 'Channel', 'Salesman', 'Visited', 'Outcome', 'Outstanding Amount', 'Location Check', 'Distance from Shop (m)', 'Visit Time (UTC)', 'Visit Map'],
+      ...data.map(row => [
+        weekKey, row.beat, row.customerCode, row.customerName, row.channel,
+        row.visitedBy || row.assignedSalesman, row.outcome ? 'Yes' : 'No',
+        outcomeLabels[row.outcome] || '', row.outcome === 'outstanding_not_cleared' ? row.outstandingAmount : '',
+        row.outcome ? (locationLabels[row.locationStatus] || 'Not recorded') : '',
+        row.outcome && row.locationStatus === 'away' ? Math.round(row.distanceMeters) : '',
+        row.visitedAt || '',
+        row.visitLat === null || row.visitLat === undefined ? '' : `https://www.google.com/maps?q=${row.visitLat},${row.visitLng}`
+      ])
+    ];
+    const workbook = createWorkbook([{ name: 'Shop Check-ins', rows, autoFilterRow: 1 }]);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="Shop-Checkins-${weekKey}.xlsx"`,
+      'Content-Length': workbook.length,
+      'Cache-Control': 'no-store'
+    });
+    res.send(Buffer.from(workbook));
+  } catch (error) {
+    console.error('Could not export shop check-ins:', error);
+    res.status(500).json({ error: 'Could not export shop check-ins.' });
+  }
+});
+
+app.get('/api/orders/visits', requireOrderAccess, requireOrderSalesman, async (req, res) => {
+  const weekKey = String(req.query.week || '');
+  const channel = String(req.query.channel || '');
+  if (!isValidOrderWeek(weekKey)) return res.status(400).json({ error: 'Choose a valid week.' });
+  if (!['ALL', ...ORDER_CHANNELS].includes(channel)) return res.status(400).json({ error: 'Choose HORECA, ISS or all channels.' });
+  try {
+    const db = req.app.locals.db;
+    const customers = await getVisibleCustomers(db, req.user, channel);
+    const visits = await db.all(
+      `SELECT customer_id AS customerId, outcome, outstanding_amount AS outstandingAmount, updated_at AS updatedAt,
+              location_status AS locationStatus, distance_m AS distanceMeters
+       FROM order_store_visits WHERE company_id = ? AND user_id = ? AND week_key = ?`,
+      [req.user.companyId, req.user.id, weekKey]
+    );
+    const visitByCustomer = new Map(visits.map(visit => [visit.customerId, visit]));
+    res.json({
+      week: weekKey,
+      customers: customers.map(({ locationLat, locationLng, ...customer }) => ({ ...customer, visit: visitByCustomer.get(customer.id) || null }))
+    });
+  } catch (error) {
+    console.error('Could not load weekly shop visits:', error);
+    res.status(500).json({ error: 'Could not load weekly shop visits.' });
+  }
+});
+
+app.post('/api/orders/visits', requireOrderAccess, requireOrderSalesman, async (req, res) => {
+  const customerId = Number(req.body?.customerId);
+  const weekKey = String(req.body?.week || '');
+  const channel = String(req.body?.channel || '');
+  const outcome = String(req.body?.outcome || '');
+  const amountInput = req.body?.outstandingAmount;
+  const outstandingAmount = amountInput === '' || amountInput === null || amountInput === undefined
+    ? NaN : Number(amountInput);
+  const locationLat = typeof req.body?.latitude === 'number' ? req.body.latitude : null;
+  const locationLng = typeof req.body?.longitude === 'number' ? req.body.longitude : null;
+  if (!Number.isInteger(customerId)) return res.status(400).json({ error: 'Choose a customer.' });
+  if (!isValidOrderWeek(weekKey)) return res.status(400).json({ error: 'Choose a valid week.' });
+  if (!['ALL', ...ORDER_CHANNELS].includes(channel)) return res.status(400).json({ error: 'Choose HORECA, ISS or all channels.' });
+  if (!['order_taken', 'outstanding_not_cleared', 'order_not_given'].includes(outcome)) {
+    return res.status(400).json({ error: 'Choose a visit outcome.' });
+  }
+  if (outcome === 'outstanding_not_cleared' && (!Number.isFinite(outstandingAmount) || outstandingAmount <= 0 || outstandingAmount > 1000000000)) {
+    return res.status(400).json({ error: 'Enter an outstanding amount greater than zero.' });
+  }
+  if (outcome !== 'outstanding_not_cleared' && Number.isFinite(outstandingAmount) && outstandingAmount !== 0) {
+    return res.status(400).json({ error: 'Only enter an amount when outstanding is not cleared.' });
+  }
+  if ((locationLat !== null || locationLng !== null) &&
+      (!Number.isFinite(locationLat) || !Number.isFinite(locationLng) || locationLat < -90 || locationLat > 90 || locationLng < -180 || locationLng > 180)) {
+    return res.status(400).json({ error: 'The captured location is invalid. Please try again.' });
+  }
+
+  const db = req.app.locals.db;
+  let transactionOpen = false;
+  try {
+    const customer = (await getVisibleCustomers(db, req.user, channel)).find(row => row.id === customerId);
+    if (!customer) return res.status(400).json({ error: 'Choose one of your assigned customers.' });
+    await db.exec('BEGIN IMMEDIATE');
+    transactionOpen = true;
+    if (locationLat === null || locationLng === null) {
+      throw Object.assign(new Error('Allow location access so your visit can be verified at the shop.'), { client: true });
+    }
+    let lockedLat = customer.locationLat;
+    let lockedLng = customer.locationLng;
+    let locationStatus = 'at_shop';
+    let distanceMeters = 0;
+    if (!customer.locationCaptured) {
+      await db.run(
+        `UPDATE order_customers
+         SET location_lat = ?, location_lng = ?, location_captured_at = CURRENT_TIMESTAMP, location_captured_by = ?
+         WHERE id = ? AND company_id = ? AND location_lat IS NULL AND location_lng IS NULL`,
+        [locationLat, locationLng, req.user.id, customerId, req.user.companyId]
+      );
+      locationStatus = 'first_capture';
+    } else {
+      distanceMeters = distanceInMeters(lockedLat, lockedLng, locationLat, locationLng);
+      if (distanceMeters > VISIT_RADIUS_METERS) locationStatus = 'away';
+    }
+    await db.run(
+      `INSERT INTO order_store_visits (company_id, customer_id, user_id, week_key, outcome, outstanding_amount,
+                                       visit_lat, visit_lng, distance_m, location_status, visit_date)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, date('now', '+330 minutes'))
+       ON CONFLICT(company_id, customer_id, user_id, week_key) DO UPDATE SET
+         outcome = excluded.outcome, outstanding_amount = excluded.outstanding_amount,
+         visit_lat = excluded.visit_lat, visit_lng = excluded.visit_lng,
+         distance_m = excluded.distance_m, location_status = excluded.location_status,
+         visit_date = excluded.visit_date, updated_at = CURRENT_TIMESTAMP`,
+      [req.user.companyId, customerId, req.user.id, weekKey, outcome,
+        outcome === 'outstanding_not_cleared' ? outstandingAmount : 0,
+        locationLat, locationLng, distanceMeters, locationStatus]
+    );
+    await db.exec('COMMIT');
+    transactionOpen = false;
+    res.json({ ok: true, locationCaptured: true, locationStatus });
+  } catch (error) {
+    if (transactionOpen) await db.exec('ROLLBACK').catch(() => {});
+    if (error.client) return res.status(400).json({ error: error.message });
+    console.error('Could not save weekly shop visit:', error);
+    res.status(500).json({ error: 'Could not save this shop visit.' });
+  }
+});
 
 app.get('/api/orders/lookups', requireOrderAccess, async (req, res) => {
   const channel = String(req.query.channel || '');
@@ -2636,13 +2879,13 @@ app.post('/api/profitability/at-stock/removals', async (req, res) => {
   if (product.category === 'AT' && !getAtPackWeightKg(product.itemName)) {
     return res.status(400).json({ error: 'This product needs a pack size in its name before stock can be removed.' });
   }
-  try {
-    const warehouse = await loadDamageWarehouse(req.app.locals.db, req.user.companyId, selectedDate);
-    const match = warehouse.find(entry => atProductKey(entry) === atProductKey(product));
-    if (!match || quantity > match.balanceQty + 0.0001) {
-      return res.status(400).json({ error: `Only ${match ? match.balanceDisplay : '0'} is available in the damaged warehouse for this product.` });
-    }
-    await req.app.locals.db.run(
+  try {
+    const warehouse = await loadDamageWarehouse(req.app.locals.db, req.user.companyId, selectedDate);
+    const match = warehouse.find(entry => atProductKey(entry) === atProductKey(product));
+    if (!match || quantity > match.balanceQty + 0.0001) {
+      return res.status(400).json({ error: `Only ${match ? match.balanceDisplay : '0'} is available in the damaged warehouse for this product.` });
+    }
+    await req.app.locals.db.run(
       `INSERT INTO at_stock_removals (company_id, stock_date, sales_category, item_code, item_name, qty, remarks, created_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [req.user.companyId, selectedDate, product.category, product.itemCode, product.itemName, quantity, remarks, req.user.fullName || req.user.username || '']
