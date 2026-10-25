@@ -305,9 +305,12 @@
           </div>
           <section class="deliveries-panel orders-panel" id="weekly-visits-panel" hidden>
             <div class="panel-header"><h2>Weekly shop check-in</h2><span id="visit-summary">0 of 0 checked in</span></div>
-            <p class="weekly-visits-help">Record each customer’s visit outcome once per week. The first saved visit captures and locks the outlet location; every later visit is checked against it (within 150 m) and reported to your manager.</p>
+            <p class="weekly-visits-help">Pick the visit date and your route, then record each customer’s outcome. The first saved visit captures and locks the outlet location; every later visit is checked against it (within 150 m) and reported to your manager.</p>
             <div class="orders-filters weekly-visits-filters">
-              <label>Week <input id="visit-week" type="week" required></label>
+              <label>Date <input id="visit-date" type="date" required></label>
+              <label>Route
+                <select id="visit-beat"><option value="__all">All routes</option></select>
+              </label>
               <label>Channel
                 <select id="visit-channel">
                   <option value="ALL">All channels</option>

@@ -1121,6 +1121,15 @@ function isValidOrderWeek(weekKey) {
   return date.getUTCFullYear() === year;
 }
 
+function isoWeekKeyForDate(dateText) {
+  const date = new Date(`${dateText}T00:00:00Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== dateText) return '';
+  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+  return `${date.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
 const VISIT_RADIUS_METERS = 150;
 
 function distanceInMeters(lat1, lng1, lat2, lng2) {
@@ -1242,7 +1251,8 @@ app.get('/api/orders/visits', requireOrderAccess, requireOrderSalesman, async (r
 
 app.post('/api/orders/visits', requireOrderAccess, requireOrderSalesman, async (req, res) => {
   const customerId = Number(req.body?.customerId);
-  const weekKey = String(req.body?.week || '');
+  const visitDate = String(req.body?.date || '');
+  const weekKey = isoWeekKeyForDate(visitDate);
   const channel = String(req.body?.channel || '');
   const outcome = String(req.body?.outcome || '');
   const amountInput = req.body?.outstandingAmount;
@@ -1251,7 +1261,10 @@ app.post('/api/orders/visits', requireOrderAccess, requireOrderSalesman, async (
   const locationLat = typeof req.body?.latitude === 'number' ? req.body.latitude : null;
   const locationLng = typeof req.body?.longitude === 'number' ? req.body.longitude : null;
   if (!Number.isInteger(customerId)) return res.status(400).json({ error: 'Choose a customer.' });
-  if (!isValidOrderWeek(weekKey)) return res.status(400).json({ error: 'Choose a valid week.' });
+  if (!weekKey) return res.status(400).json({ error: 'Choose a valid date.' });
+  if (visitDate > new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10)) {
+    return res.status(400).json({ error: 'The visit date cannot be in the future.' });
+  }
   if (!['ALL', ...ORDER_CHANNELS].includes(channel)) return res.status(400).json({ error: 'Choose HORECA, ISS or all channels.' });
   if (!['order_taken', 'outstanding_not_cleared', 'order_not_given'].includes(outcome)) {
     return res.status(400).json({ error: 'Choose a visit outcome.' });
@@ -1296,7 +1309,7 @@ app.post('/api/orders/visits', requireOrderAccess, requireOrderSalesman, async (
     await db.run(
       `INSERT INTO order_store_visits (company_id, customer_id, user_id, week_key, outcome, outstanding_amount,
                                        visit_lat, visit_lng, distance_m, location_status, visit_date)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, date('now', '+330 minutes'))
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(company_id, customer_id, user_id, week_key) DO UPDATE SET
          outcome = excluded.outcome, outstanding_amount = excluded.outstanding_amount,
          visit_lat = excluded.visit_lat, visit_lng = excluded.visit_lng,
@@ -1304,7 +1317,7 @@ app.post('/api/orders/visits', requireOrderAccess, requireOrderSalesman, async (
          visit_date = excluded.visit_date, updated_at = CURRENT_TIMESTAMP`,
       [req.user.companyId, customerId, req.user.id, weekKey, outcome,
         outcome === 'outstanding_not_cleared' ? outstandingAmount : 0,
-        locationLat, locationLng, distanceMeters, locationStatus]
+        locationLat, locationLng, distanceMeters, locationStatus, visitDate]
     );
     await db.exec('COMMIT');
     transactionOpen = false;

@@ -1130,12 +1130,32 @@ function currentIsoWeek() {
   return `${year}-W${String(week).padStart(2, '0')}`;
 }
 
+function isoWeekForDate(dateText) {
+  const [y, m, d] = dateText.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+  return `${date.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+function renderVisitBeatOptions() {
+  const select = document.querySelector('#visit-beat');
+  const previous = select.value;
+  const beats = [...new Set(weeklyVisitCustomers.map(customer => customer.beat || ''))].sort((a, b) => a.localeCompare(b));
+  select.innerHTML = '<option value="__all">All routes</option>' +
+    beats.map(beat => `<option value="${escapeHtml(beat)}">${escapeHtml(beat || 'No route')}</option>`).join('');
+  select.value = beats.includes(previous) ? previous : '__all';
+}
+
 function renderWeeklyVisits() {
   const search = document.querySelector('#visit-search').value.trim().toLowerCase();
-  const checkedIn = weeklyVisitCustomers.filter(customer => customer.visit).length;
+  const beat = document.querySelector('#visit-beat').value;
+  const inRoute = weeklyVisitCustomers.filter(customer => beat === '__all' || (customer.beat || '') === beat);
+  const checkedIn = inRoute.filter(customer => customer.visit).length;
   document.querySelector('#visit-summary').textContent =
-    `${checkedIn} of ${weeklyVisitCustomers.length} customer${weeklyVisitCustomers.length === 1 ? '' : 's'} checked in`;
-  const customers = weeklyVisitCustomers.filter(customer =>
+    `${checkedIn} of ${inRoute.length} customer${inRoute.length === 1 ? '' : 's'} checked in`;
+  const customers = inRoute.filter(customer =>
     `${customer.name} ${customer.beat} ${customer.address}`.toLowerCase().includes(search));
   const list = document.querySelector('#weekly-visits-list');
   document.querySelector('#visit-empty').hidden = customers.length > 0;
@@ -1180,7 +1200,9 @@ function renderWeeklyVisits() {
 }
 
 async function loadWeeklyVisits() {
-  const week = document.querySelector('#visit-week').value;
+  const date = document.querySelector('#visit-date').value;
+  if (!date) return;
+  const week = isoWeekForDate(date);
   const channel = document.querySelector('#visit-channel').value;
   try {
     const result = await requestJson(`/api/orders/visits?week=${encodeURIComponent(week)}&channel=${encodeURIComponent(channel)}`);
@@ -1193,6 +1215,7 @@ async function loadWeeklyVisits() {
         outstandingAmount: customer.visit?.outstandingAmount || ''
       }
     ]));
+    renderVisitBeatOptions();
     renderWeeklyVisits();
   } catch (error) {
     showToast(error.message, true);
@@ -1243,7 +1266,7 @@ async function saveWeeklyVisit(button) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         customerId,
-        week: document.querySelector('#visit-week').value,
+        date: document.querySelector('#visit-date').value,
         channel: document.querySelector('#visit-channel').value,
         outcome: draft.outcome,
         outstandingAmount: draft.outcome === 'outstanding_not_cleared' ? Number(draft.outstandingAmount) : 0,
@@ -1350,7 +1373,8 @@ function initializeOrdersInterface() {
     const salesman = document.querySelector('#report-salesman').value;
     downloadExcelReport(`/api/orders/visits/export?${new URLSearchParams({ date, ...(salesman ? { salesman } : {}) })}`, `Shop-Checkins-${date}.xlsx`, event.currentTarget);
   });
-  document.querySelector('#visit-week').addEventListener('change', loadWeeklyVisits);
+  document.querySelector('#visit-date').addEventListener('change', loadWeeklyVisits);
+  document.querySelector('#visit-beat').addEventListener('change', renderWeeklyVisits);
   document.querySelector('#visit-channel').addEventListener('change', loadWeeklyVisits);
   document.querySelector('#visit-search').addEventListener('input', renderWeeklyVisits);
   document.querySelector('#weekly-visits-list').addEventListener('change', event => {
@@ -1537,8 +1561,9 @@ function openOrdersPage() {
     initializeOrdersInterface();
   }
   currentOrderChannel = document.querySelector('#order-channel').value;
-  const weekInput = document.querySelector('#visit-week');
-  if (!weekInput.value) weekInput.value = currentIsoWeek();
+  const visitDateInput = document.querySelector('#visit-date');
+  if (!visitDateInput.value) visitDateInput.value = getLocalDateValue();
+  visitDateInput.max = getLocalDateValue();
   setOrderError();
   const dateInput = document.querySelector('#order-date');
   if (!dateInput.value) dateInput.value = getLocalDateValue();
