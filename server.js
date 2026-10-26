@@ -1232,8 +1232,8 @@ app.get('/api/orders/visits/export', requireOrderManager, async (req, res) => {
         weekKey, row.beat, row.customerCode, row.customerName, row.channel,
         row.visitedBy || row.assignedSalesman, row.outcome ? 'Yes' : 'No',
         outcomeLabels[row.outcome] || '', row.outcome === 'outstanding_not_cleared' ? row.outstandingAmount : '',
-        row.outcome ? (locationLabels[row.locationStatus] || 'Not recorded') : '',
-        row.outcome && row.locationStatus === 'away' ? Math.round(row.distanceMeters) : '',
+        row.outcome ? (row.locationCaptured ? (locationLabels[row.locationStatus] || 'Not recorded') : 'Location not yet captured') : '',
+        row.outcome && row.locationCaptured && row.locationStatus === 'away' ? Math.round(row.distanceMeters) : '',
         row.visitedAt || '',
         row.visitLat === null || row.visitLat === undefined ? '' : `https://www.google.com/maps?q=${row.visitLat},${row.visitLng}`
       ])

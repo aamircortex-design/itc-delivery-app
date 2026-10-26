@@ -1096,11 +1096,13 @@ function renderVisitReport() {
   document.querySelector('#report-list').innerHTML = rows.map(row => {
     let badge = '<span class="visit-location not-captured">Not visited</span>';
     if (row.outcome) {
-      badge = row.locationStatus === 'away'
-        ? `<span class="visit-location not-captured">Not at shop · ${Math.round(row.distanceMeters)} m away</span>`
-        : row.locationStatus === 'first_capture'
-          ? '<span class="visit-location captured">Location captured</span>'
-          : '<span class="visit-location captured">At shop</span>';
+      badge = !row.locationCaptured
+        ? '<span class="visit-location not-captured">Location not yet captured</span>'
+        : row.locationStatus === 'away'
+          ? `<span class="visit-location not-captured">Not at shop · ${Math.round(row.distanceMeters)} m away</span>`
+          : row.locationStatus === 'first_capture'
+            ? '<span class="visit-location captured">Location captured</span>'
+            : '<span class="visit-location captured">At shop</span>';
     }
     const outcome = row.outcome
       ? `${escapeHtml(visitOutcomeLabels[row.outcome])}${row.outcome === 'outstanding_not_cleared' ? ` · ${formatMoney(row.outstandingAmount)}` : ''}`
@@ -1179,10 +1181,10 @@ function renderWeeklyVisits() {
         <span class="visit-location ${customer.locationCaptured ? 'captured' : 'not-captured'}">
           ${customer.locationCaptured
             ? `Location locked${customer.locationAccuracyMeters ? ` · ±${Math.round(customer.locationAccuracyMeters)} m` : ''}`
-            : 'Location needs capture'}
+            : 'Location not yet captured'}
         </span>
       </div>
-      ${saved ? `<p class="visit-saved">This week: ${escapeHtml(outcomeLabels[saved.outcome] || saved.outcome)}${saved.outcome === 'outstanding_not_cleared' ? ` · ${formatMoney(saved.outstandingAmount)}` : ''}${saved.locationStatus === 'away' ? ' · Not at shop location' : ''}</p>` : ''}
+      ${saved ? `<p class="visit-saved">This week: ${escapeHtml(outcomeLabels[saved.outcome] || saved.outcome)}${saved.outcome === 'outstanding_not_cleared' ? ` · ${formatMoney(saved.outstandingAmount)}` : ''}${saved.locationStatus === 'away' && customer.locationCaptured ? ' · Not at shop location' : ''}${customer.locationCaptured ? '' : ' · Location not yet captured'}</p>` : ''}
       <div class="weekly-visit-controls">
         <button class="button button-secondary" type="button" data-capture-outlet-location="${customer.id}"
           ${customer.locationCaptured ? 'disabled' : ''}>
