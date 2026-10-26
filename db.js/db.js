@@ -196,6 +196,7 @@ async function initDb() {
       address TEXT NOT NULL DEFAULT '',
       location_lat REAL,
       location_lng REAL,
+      location_accuracy_m REAL,
       location_captured_at TEXT,
       location_captured_by INTEGER,
       UNIQUE (company_id, name, channel)
@@ -385,6 +386,9 @@ async function initDb() {
   }
   if (!orderCustomerColumns.some(column => column.name === 'location_lng')) {
     await db.exec('ALTER TABLE order_customers ADD COLUMN location_lng REAL');
+  }
+  if (!orderCustomerColumns.some(column => column.name === 'location_accuracy_m')) {
+    await db.exec('ALTER TABLE order_customers ADD COLUMN location_accuracy_m REAL');
   }
   if (!orderCustomerColumns.some(column => column.name === 'location_captured_at')) {
     await db.exec('ALTER TABLE order_customers ADD COLUMN location_captured_at TEXT');

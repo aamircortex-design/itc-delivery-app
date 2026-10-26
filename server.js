@@ -995,7 +995,9 @@ app.get('/api/orders/customers', requireOrderAdmin, async (req, res) => {
   try {
     const customers = await req.app.locals.db.all(
       `SELECT id, beat, name, channel, salesman, address,
-              location_lat IS NOT NULL AND location_lng IS NOT NULL AS locationCaptured
+              location_lat IS NOT NULL AND location_lng IS NOT NULL AS locationCaptured,
+              location_lat IS NOT NULL OR location_lng IS NOT NULL AS locationNeedsReset,
+              location_accuracy_m AS locationAccuracyMeters
        FROM order_customers
        WHERE company_id = ? ORDER BY beat COLLATE NOCASE, name COLLATE NOCASE`,
       [req.user.companyId]
@@ -1015,9 +1017,10 @@ app.delete('/api/orders/customers/:id/location', requireOrderAdmin, async (req, 
   try {
     const result = await req.app.locals.db.run(
       `UPDATE order_customers
-       SET location_lat = NULL, location_lng = NULL, location_captured_at = NULL, location_captured_by = NULL
+       SET location_lat = NULL, location_lng = NULL, location_accuracy_m = NULL,
+           location_captured_at = NULL, location_captured_by = NULL
        WHERE id = ? AND company_id = ?
-         AND location_lat IS NOT NULL AND location_lng IS NOT NULL`,
+         AND (location_lat IS NOT NULL OR location_lng IS NOT NULL)`,
       [customerId, req.user.companyId]
     );
     if (!result.changes) return res.status(404).json({ error: 'This outlet has no saved location to reset.' });
@@ -1123,6 +1126,7 @@ async function getVisibleCustomers(db, user, channel) {
   return db.all(
     `SELECT id, name, address, beat, channel, customer_code AS code,
             location_lat AS locationLat, location_lng AS locationLng,
+            location_accuracy_m AS locationAccuracyMeters,
             location_lat IS NOT NULL AND location_lng IS NOT NULL AS locationCaptured
      FROM order_customers WHERE company_id = ? ${channelFilter} ${salesmanFilter}
      ORDER BY name COLLATE NOCASE`,
@@ -1154,6 +1158,7 @@ function isoWeekKeyForDate(dateText) {
 }
 
 const VISIT_RADIUS_METERS = 150;
+const MAX_VISIT_LOCATION_ACCURACY_METERS = 50;
 
 function distanceInMeters(lat1, lng1, lat2, lng2) {
   const toRad = degrees => degrees * Math.PI / 180;
@@ -1272,6 +1277,47 @@ app.get('/api/orders/visits', requireOrderAccess, requireOrderSalesman, async (r
   }
 });
 
+app.post('/api/orders/customers/:id/location', requireOrderAccess, requireOrderSalesman, async (req, res) => {
+  const customerId = Number(req.params.id);
+  const latitude = req.body?.latitude;
+  const longitude = req.body?.longitude;
+  const accuracyMeters = req.body?.accuracy;
+  if (!Number.isSafeInteger(customerId) || customerId < 1) {
+    return res.status(400).json({ error: 'Choose a valid outlet.' });
+  }
+  if (typeof latitude !== 'number' || typeof longitude !== 'number' ||
+      !Number.isFinite(latitude) || !Number.isFinite(longitude) ||
+      latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+    return res.status(400).json({ error: 'The captured location is invalid. Please try again.' });
+  }
+  if (typeof accuracyMeters !== 'number' || !Number.isFinite(accuracyMeters) ||
+      accuracyMeters <= 0 || accuracyMeters > MAX_VISIT_LOCATION_ACCURACY_METERS) {
+    return res.status(400).json({
+      error: `GPS accuracy must be ${MAX_VISIT_LOCATION_ACCURACY_METERS} m or better. Move to an open area and try again.`
+    });
+  }
+
+  try {
+    const db = req.app.locals.db;
+    const customer = (await getVisibleCustomers(db, req.user, 'ALL')).find(row => row.id === customerId);
+    if (!customer) return res.status(400).json({ error: 'Choose one of your assigned outlets.' });
+    const result = await db.run(
+      `UPDATE order_customers
+       SET location_lat = ?, location_lng = ?, location_accuracy_m = ?,
+           location_captured_at = CURRENT_TIMESTAMP, location_captured_by = ?
+       WHERE id = ? AND company_id = ? AND (location_lat IS NULL OR location_lng IS NULL)`,
+      [latitude, longitude, accuracyMeters, req.user.id, customerId, req.user.companyId]
+    );
+    if (!result.changes) {
+      return res.status(409).json({ error: 'This outlet already has a saved location. Refresh outlets to check its status.' });
+    }
+    res.json({ ok: true, locationCaptured: true, accuracyMeters });
+  } catch (error) {
+    console.error('Could not capture outlet location:', error);
+    res.status(500).json({ error: 'Could not capture this outlet location.' });
+  }
+});
+
 app.post('/api/orders/visits', requireOrderAccess, requireOrderSalesman, async (req, res) => {
   const customerId = Number(req.body?.customerId);
   const visitDate = String(req.body?.date || '');
@@ -1283,6 +1329,7 @@ app.post('/api/orders/visits', requireOrderAccess, requireOrderSalesman, async (
     ? NaN : Number(amountInput);
   const locationLat = typeof req.body?.latitude === 'number' ? req.body.latitude : null;
   const locationLng = typeof req.body?.longitude === 'number' ? req.body.longitude : null;
+  const locationAccuracy = typeof req.body?.accuracy === 'number' ? req.body.accuracy : null;
   if (!Number.isInteger(customerId)) return res.status(400).json({ error: 'Choose a customer.' });
   if (!weekKey) return res.status(400).json({ error: 'Choose a valid date.' });
   if (visitDate > new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10)) {
@@ -1302,6 +1349,12 @@ app.post('/api/orders/visits', requireOrderAccess, requireOrderSalesman, async (
       (!Number.isFinite(locationLat) || !Number.isFinite(locationLng) || locationLat < -90 || locationLat > 90 || locationLng < -180 || locationLng > 180)) {
     return res.status(400).json({ error: 'The captured location is invalid. Please try again.' });
   }
+  if (locationAccuracy === null || !Number.isFinite(locationAccuracy) ||
+      locationAccuracy <= 0 || locationAccuracy > MAX_VISIT_LOCATION_ACCURACY_METERS) {
+    return res.status(400).json({
+      error: `GPS accuracy must be ${MAX_VISIT_LOCATION_ACCURACY_METERS} m or better. Move to an open area and try again.`
+    });
+  }
 
   const db = req.app.locals.db;
   let transactionOpen = false;
@@ -1313,22 +1366,19 @@ app.post('/api/orders/visits', requireOrderAccess, requireOrderSalesman, async (
     if (locationLat === null || locationLng === null) {
       throw Object.assign(new Error('Allow location access so your visit can be verified at the shop.'), { client: true });
     }
-    let lockedLat = customer.locationLat;
-    let lockedLng = customer.locationLng;
-    let locationStatus = 'at_shop';
-    let distanceMeters = 0;
-    if (!customer.locationCaptured) {
-      await db.run(
-        `UPDATE order_customers
-         SET location_lat = ?, location_lng = ?, location_captured_at = CURRENT_TIMESTAMP, location_captured_by = ?
-         WHERE id = ? AND company_id = ? AND location_lat IS NULL AND location_lng IS NULL`,
-        [locationLat, locationLng, req.user.id, customerId, req.user.companyId]
-      );
-      locationStatus = 'first_capture';
-    } else {
-      distanceMeters = distanceInMeters(lockedLat, lockedLng, locationLat, locationLng);
-      if (distanceMeters > VISIT_RADIUS_METERS) locationStatus = 'away';
+    const lockedLocation = await db.get(
+      `SELECT location_lat AS latitude, location_lng AS longitude
+       FROM order_customers WHERE id = ? AND company_id = ?`,
+      [customerId, req.user.companyId]
+    );
+    if (lockedLocation?.latitude === null || lockedLocation?.latitude === undefined ||
+        lockedLocation?.longitude === null || lockedLocation?.longitude === undefined) {
+      throw Object.assign(new Error('Capture this outlet’s shop location before saving the visit.'), { client: true });
     }
+    const distanceMeters = distanceInMeters(
+      lockedLocation.latitude, lockedLocation.longitude, locationLat, locationLng
+    );
+    const locationStatus = distanceMeters > VISIT_RADIUS_METERS ? 'away' : 'at_shop';
     await db.run(
       `INSERT INTO order_store_visits (company_id, customer_id, user_id, week_key, outcome, outstanding_amount,
                                        visit_lat, visit_lng, distance_m, location_status, visit_date)

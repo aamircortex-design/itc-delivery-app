@@ -1052,6 +1052,7 @@ async function loadOrders() {
 let weeklyVisitCustomers = [];
 let weeklyVisitDrafts = new Map();
 let visitReportRows = [];
+const MAX_LOCATION_ACCURACY_METERS = 50;
 const visitOutcomeLabels = {
   order_taken: 'Order taken',
   outstanding_not_cleared: 'Outstanding not cleared',
@@ -1176,11 +1177,17 @@ function renderWeeklyVisits() {
         <div><h3>${escapeHtml(customer.name)}</h3>
           <p>${escapeHtml(customer.beat || 'No beat')} · ${escapeHtml(customer.channel || 'Both channels')}${customer.address ? ` · ${escapeHtml(customer.address)}` : ''}</p></div>
         <span class="visit-location ${customer.locationCaptured ? 'captured' : 'not-captured'}">
-          ${customer.locationCaptured ? 'Location locked' : 'Location needed on first visit'}
+          ${customer.locationCaptured
+            ? `Location locked${customer.locationAccuracyMeters ? ` · ±${Math.round(customer.locationAccuracyMeters)} m` : ''}`
+            : 'Location needs capture'}
         </span>
       </div>
       ${saved ? `<p class="visit-saved">This week: ${escapeHtml(outcomeLabels[saved.outcome] || saved.outcome)}${saved.outcome === 'outstanding_not_cleared' ? ` · ${formatMoney(saved.outstandingAmount)}` : ''}${saved.locationStatus === 'away' ? ' · Not at shop location' : ''}</p>` : ''}
       <div class="weekly-visit-controls">
+        <button class="button button-secondary" type="button" data-capture-outlet-location="${customer.id}"
+          ${customer.locationCaptured ? 'disabled' : ''}>
+          ${customer.locationCaptured ? 'Location captured' : 'Capture shop location'}
+        </button>
         <label>Visit outcome
           <select data-visit-outcome="${customer.id}">
             <option value="">Choose outcome</option>
@@ -1193,7 +1200,8 @@ function renderWeeklyVisits() {
           <input type="number" min="0.01" max="1000000000" step="0.01" inputmode="decimal"
             data-visit-amount="${customer.id}" value="${escapeHtml(String(draft.outstandingAmount || ''))}" placeholder="Enter amount">
         </label>
-        <button class="button button-secondary" type="button" data-save-visit="${customer.id}">${saved ? 'Update this week' : 'Save visit'}</button>
+        <button class="button button-secondary" type="button" data-save-visit="${customer.id}"
+          ${customer.locationCaptured ? '' : 'disabled'}>Save outlet update</button>
       </div>
     </article>`;
   }).join('');
@@ -1205,7 +1213,7 @@ async function loadWeeklyVisits() {
   const week = isoWeekForDate(date);
   const channel = document.querySelector('#visit-channel').value;
   try {
-    const result = await requestJson(`/api/orders/visits?week=${encodeURIComponent(week)}&channel=${encodeURIComponent(channel)}`);
+    const result = await requestJson(`/api/orders/visits?week=${encodeURIComponent(week)}&channel=${encodeURIComponent(channel)}`, { cache: 'no-store' });
     weeklyVisitCustomers = result.customers.sort((a, b) =>
       a.beat.localeCompare(b.beat) || a.name.localeCompare(b.name));
     weeklyVisitDrafts = new Map(weeklyVisitCustomers.map(customer => [
@@ -1229,24 +1237,63 @@ function getCurrentOutletLocation() {
       return;
     }
     navigator.geolocation.getCurrentPosition(
-      position => resolve({ latitude: position.coords.latitude, longitude: position.coords.longitude }),
+      position => resolve({
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: position.coords.accuracy
+      }),
       error => {
         const message = error.code === 1
-          ? 'Location permission was denied. Allow location access in your browser settings to save the first visit.'
+          ? 'Location permission was denied. Allow location access in your browser settings to capture the shop pin or save an outlet update.'
           : error.code === 3
-            ? 'Location capture timed out. Try again in an area with a clearer GPS signal.'
+            ? 'Location capture timed out. Move to an open area with a clearer GPS signal and try again.'
             : 'Could not get the device location. Check location services and try again.';
         reject(new Error(message));
       },
-      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+      { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
     );
   });
+}
+
+function validateLocationAccuracy(accuracy) {
+  if (!Number.isFinite(accuracy) || accuracy <= 0) {
+    throw new Error('Your device did not report GPS accuracy. Check location settings and try again.');
+  }
+  if (accuracy > MAX_LOCATION_ACCURACY_METERS) {
+    throw new Error(`GPS accuracy is about ${Math.round(accuracy)} m. Move to an open area and try again; accuracy must be ${MAX_LOCATION_ACCURACY_METERS} m or better.`);
+  }
+}
+
+async function captureOutletLocation(button) {
+  const customerId = Number(button.dataset.captureOutletLocation);
+  const customer = weeklyVisitCustomers.find(entry => entry.id === customerId);
+  if (!customer || customer.locationCaptured) return;
+  button.disabled = true;
+  try {
+    const location = await getCurrentOutletLocation();
+    validateLocationAccuracy(location.accuracy);
+    await requestJson(`/api/orders/customers/${customerId}/location`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(location)
+    });
+    showToast(`Shop location captured (GPS accuracy ±${Math.round(location.accuracy)} m).`);
+    await loadWeeklyVisits();
+  } catch (error) {
+    showToast(error.message, true);
+    button.disabled = false;
+    if (error.message.includes('already has a saved location')) await loadWeeklyVisits();
+  }
 }
 
 async function saveWeeklyVisit(button) {
   const customerId = Number(button.dataset.saveVisit);
   const customer = weeklyVisitCustomers.find(entry => entry.id === customerId);
   if (!customer) return;
+  if (!customer.locationCaptured) {
+    showToast('Capture this outlet’s shop location before saving the visit.', true);
+    return;
+  }
   const draft = weeklyVisitDrafts.get(customerId) || {};
   if (!draft.outcome) {
     showToast('Choose a visit outcome before saving.', true);
@@ -1261,6 +1308,7 @@ async function saveWeeklyVisit(button) {
   button.disabled = true;
   try {
     const location = await getCurrentOutletLocation();
+    validateLocationAccuracy(location.accuracy);
     const result = await requestJson('/api/orders/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1274,10 +1322,11 @@ async function saveWeeklyVisit(button) {
       })
     });
     if (result.locationStatus === 'away') showToast('Visit saved, but you are not at the shop location. Your manager can see this.', true);
-    else showToast(customer.locationCaptured ? 'Weekly visit saved.' : 'Location captured and weekly visit saved.');
+    else showToast('Outlet update saved.');
     await loadWeeklyVisits();
   } catch (error) {
     showToast(error.message, true);
+    if (error.message.includes('Capture this outlet')) await loadWeeklyVisits();
   } finally {
     button.disabled = false;
   }
@@ -1298,8 +1347,8 @@ function renderCustomerMaster() {
   document.querySelector('#master-rows').innerHTML = rows.map(customer => `
     <tr><td>${escapeHtml(customer.beat)}</td><td>${escapeHtml(customer.name)}</td><td>${escapeHtml(customer.channel || 'Both')}</td>
     <td>${escapeHtml(customer.salesman)}</td><td>${escapeHtml(customer.address)}</td>
-    <td>${customer.locationCaptured
-      ? `<button class="button button-secondary" type="button" data-reset-customer-location="${customer.id}">Reset location</button>`
+    <td>${customer.locationNeedsReset
+      ? `<button class="button button-secondary" type="button" data-reset-customer-location="${customer.id}">Reset location${customer.locationAccuracyMeters ? ` (±${Math.round(customer.locationAccuracyMeters)} m)` : ''}</button>`
       : 'Not captured'}</td></tr>`).join('');
 }
 
@@ -1394,6 +1443,7 @@ function initializeOrdersInterface() {
   document.querySelector('#visit-date').addEventListener('change', loadWeeklyVisits);
   document.querySelector('#visit-beat').addEventListener('change', renderWeeklyVisits);
   document.querySelector('#visit-channel').addEventListener('change', loadWeeklyVisits);
+  document.querySelector('#refresh-weekly-visits').addEventListener('click', loadWeeklyVisits);
   document.querySelector('#visit-search').addEventListener('input', renderWeeklyVisits);
   document.querySelector('#weekly-visits-list').addEventListener('change', event => {
     const outcome = event.target.closest('[data-visit-outcome]');
@@ -1426,6 +1476,11 @@ function initializeOrdersInterface() {
     weeklyVisitDrafts.set(customerId, draft);
   });
   document.querySelector('#weekly-visits-list').addEventListener('click', event => {
+    const captureButton = event.target.closest('[data-capture-outlet-location]');
+    if (captureButton) {
+      captureOutletLocation(captureButton);
+      return;
+    }
     const button = event.target.closest('[data-save-visit]');
     if (button) saveWeeklyVisit(button);
   });

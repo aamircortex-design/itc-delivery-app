@@ -305,7 +305,7 @@
           </div>
           <section class="deliveries-panel orders-panel" id="weekly-visits-panel" hidden>
             <div class="panel-header"><h2>Weekly shop check-in</h2><span id="visit-summary">0 of 0 checked in</span></div>
-            <p class="weekly-visits-help">Pick the visit date and your route, then record each customer’s outcome. The first saved visit captures and locks the outlet location; every later visit is checked against it (within 150 m) and reported to your manager.</p>
+            <p class="weekly-visits-help">Capture each shop location first (GPS accuracy must be 50 m or better), then choose the visit outcome and save the outlet update. The capture button locks after a successful capture. Visit locations are checked against the saved shop pin within 150 m. If an admin resets a pin while this page is open, select Refresh outlets.</p>
             <div class="orders-filters weekly-visits-filters">
               <label>Date <input id="visit-date" type="date" required></label>
               <label>Route
@@ -319,6 +319,7 @@
                 </select>
               </label>
               <input id="visit-search" type="search" placeholder="Search customer or beat" autocomplete="off">
+              <button class="button button-secondary" type="button" id="refresh-weekly-visits">Refresh outlets</button>
             </div>
             <p class="at-stock-empty" id="visit-empty" hidden>No assigned customers found for this week.</p>
             <div class="weekly-visits-list" id="weekly-visits-list"></div>
