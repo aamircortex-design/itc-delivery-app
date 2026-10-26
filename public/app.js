@@ -1230,27 +1230,56 @@ async function loadWeeklyVisits() {
   }
 }
 
-function getCurrentOutletLocation() {
+function getCurrentOutletLocation(onAccuracy = () => {}) {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
       reject(new Error('This device does not support location capture.'));
       return;
     }
-    navigator.geolocation.getCurrentPosition(
-      position => resolve({
+    let bestPosition = null;
+    let watchId = null;
+    let settled = false;
+    const finish = (error, position) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timerId);
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve({
         latitude: position.coords.latitude,
         longitude: position.coords.longitude,
         accuracy: position.coords.accuracy
-      }),
-      error => {
-        const message = error.code === 1
-          ? 'Location permission was denied. Allow location access in your browser settings to capture the shop pin or save an outlet update.'
-          : error.code === 3
-            ? 'Location capture timed out. Move to an open area with a clearer GPS signal and try again.'
-            : 'Could not get the device location. Check location services and try again.';
-        reject(new Error(message));
+      });
+    };
+    const timerId = window.setTimeout(() => {
+      if (bestPosition) {
+        finish(new Error(
+          `GPS only reached about ${Math.round(bestPosition.coords.accuracy)} m accuracy. ` +
+          'Enable Precise location for this app in Android settings and turn on Google Location Accuracy, then try again.'
+        ));
+      } else {
+        finish(new Error(
+          'No GPS fix was received. Turn on Location and Google Location Accuracy, allow precise location for Chrome, then try again.'
+        ));
+      }
+    }, 60000);
+    watchId = navigator.geolocation.watchPosition(
+      position => {
+        if (!bestPosition || position.coords.accuracy < bestPosition.coords.accuracy) {
+          bestPosition = position;
+          onAccuracy(position.coords.accuracy);
+        }
+        if (position.coords.accuracy <= MAX_LOCATION_ACCURACY_METERS) finish(null, position);
       },
-      { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
+      error => {
+        if (error.code === 1) {
+          finish(new Error('Location permission was denied. Allow precise location access for Chrome in Android settings, then try again.'));
+        }
+      },
+      { enableHighAccuracy: true, timeout: 90000, maximumAge: 0 }
     );
   });
 }
@@ -1260,7 +1289,7 @@ function validateLocationAccuracy(accuracy) {
     throw new Error('Your device did not report GPS accuracy. Check location settings and try again.');
   }
   if (accuracy > MAX_LOCATION_ACCURACY_METERS) {
-    throw new Error(`GPS accuracy is about ${Math.round(accuracy)} m. Move to an open area and try again; accuracy must be ${MAX_LOCATION_ACCURACY_METERS} m or better.`);
+    throw new Error(`GPS accuracy is about ${Math.round(accuracy)} m. Enable Precise location for Chrome and Google Location Accuracy in Android settings, then retry. Accuracy must be ${MAX_LOCATION_ACCURACY_METERS} m or better.`);
   }
 }
 
@@ -1269,9 +1298,13 @@ async function captureOutletLocation(button) {
   const customer = weeklyVisitCustomers.find(entry => entry.id === customerId);
   if (!customer || customer.locationCaptured) return;
   button.disabled = true;
+  button.textContent = 'Getting GPS fix...';
   try {
-    const location = await getCurrentOutletLocation();
+    const location = await getCurrentOutletLocation(accuracy => {
+      button.textContent = `Getting GPS fix · ±${Math.round(accuracy)} m`;
+    });
     validateLocationAccuracy(location.accuracy);
+    button.textContent = 'Saving shop location...';
     await requestJson(`/api/orders/customers/${customerId}/location`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1282,6 +1315,7 @@ async function captureOutletLocation(button) {
   } catch (error) {
     showToast(error.message, true);
     button.disabled = false;
+    button.textContent = 'Capture shop location';
     if (error.message.includes('already has a saved location')) await loadWeeklyVisits();
   }
 }
@@ -1306,8 +1340,11 @@ async function saveWeeklyVisit(button) {
   }
 
   button.disabled = true;
+  button.textContent = 'Checking GPS...';
   try {
-    const location = await getCurrentOutletLocation();
+    const location = await getCurrentOutletLocation(accuracy => {
+      button.textContent = `Checking GPS · ±${Math.round(accuracy)} m`;
+    });
     validateLocationAccuracy(location.accuracy);
     const result = await requestJson('/api/orders/visits', {
       method: 'POST',
@@ -1329,6 +1366,7 @@ async function saveWeeklyVisit(button) {
     if (error.message.includes('Capture this outlet')) await loadWeeklyVisits();
   } finally {
     button.disabled = false;
+    button.textContent = 'Save outlet update';
   }
 }
 
