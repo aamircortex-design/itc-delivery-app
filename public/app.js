@@ -1443,6 +1443,22 @@ async function uploadOrderFile(kind, file) {
   }
 }
 
+async function uploadBeatRemap(file) {
+  if (!file) return;
+  const status = document.querySelector('#order-upload-status');
+  const body = new FormData();
+  body.append('file', file);
+  status.textContent = 'Updating beats…';
+  try {
+    const result = await requestJson('/api/orders/customers/beats', { method: 'POST', body });
+    status.textContent = `${result.updated} outlet beats updated, ${result.unchanged} unchanged, ${result.unmatchedCount} not found in master` +
+      `${result.unmatchedCount ? ` (${result.unmatched.join(', ')}${result.unmatchedCount > result.unmatched.length ? '…' : ''})` : ''}.`;
+    loadOrderLookups();
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
 async function clearOrderMaster(kind, label) {
   if (!window.confirm(`Remove the entire ${label}? This cannot be undone.`)) return;
   const status = document.querySelector('#order-upload-status');
@@ -1573,6 +1589,10 @@ function initializeOrdersInterface() {
   });
   document.querySelector('#order-customer-file').addEventListener('change', event => {
     uploadOrderFile('customers', event.currentTarget.files[0]);
+    event.currentTarget.value = '';
+  });
+  document.querySelector('#order-beat-file').addEventListener('change', event => {
+    uploadBeatRemap(event.currentTarget.files[0]);
     event.currentTarget.value = '';
   });
   document.querySelector('#orders-search').addEventListener('input', renderOrderCards);

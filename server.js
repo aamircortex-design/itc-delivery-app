@@ -1115,6 +1115,82 @@ app.post('/api/orders/customers', requireOrderAdmin, upload.single('file'), asyn
   }
 });
 
+app.post('/api/orders/customers/beats', requireOrderAdmin, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Choose a customer file to upload.' });
+  const db = req.app.locals.db;
+  let transactionOpen = false;
+  try {
+    const rows = await readTabularFile(req.file);
+    const headerIndex = findOrderHeaderRow(rows, [CUSTOMER_NAME_ALIASES, CUSTOMER_BEAT_ALIASES]);
+    if (headerIndex === -1) return res.status(400).json({ error: 'Could not find Customer Name and Beat columns.' });
+    const headers = rows[headerIndex];
+    const nameCol = pickColumn(headers, CUSTOMER_NAME_ALIASES);
+    const beatCol = pickColumn(headers, CUSTOMER_BEAT_ALIASES);
+    const channelCol = pickColumn(headers, CUSTOMER_CHANNEL_ALIASES);
+    const codeCol = pickColumn(headers, CUSTOMER_CODE_ALIASES);
+    const statusCol = pickColumn(headers, ['customerstatus', 'status']);
+
+    const entries = [];
+    rows.slice(headerIndex + 1).forEach(row => {
+      const name = String(row[nameCol] ?? '').trim();
+      if (!name) return;
+      if (statusCol !== -1 && String(row[statusCol] ?? '').trim().toLowerCase() === 'inactive') return;
+      entries.push({
+        name,
+        channel: channelCol === -1 ? '' : String(row[channelCol] ?? '').trim().toUpperCase(),
+        code: codeCol === -1 ? '' : String(row[codeCol] ?? '').trim(),
+        beat: String(row[beatCol] ?? '').trim().slice(0, 100)
+      });
+    });
+    if (!entries.length) return res.status(400).json({ error: 'The file has no customer rows.' });
+
+    await db.exec('BEGIN IMMEDIATE');
+    transactionOpen = true;
+    let updated = 0;
+    let unchanged = 0;
+    const unmatched = [];
+    for (const entry of entries) {
+      let matches = [];
+      if (entry.code) {
+        matches = await db.all(
+          'SELECT id, beat FROM order_customers WHERE company_id = ? AND customer_code = ? COLLATE NOCASE',
+          [req.user.companyId, entry.code]
+        );
+      }
+      if (!matches.length) {
+        matches = entry.channel
+          ? await db.all(
+            'SELECT id, beat FROM order_customers WHERE company_id = ? AND name = ? COLLATE NOCASE AND channel = ?',
+            [req.user.companyId, entry.name, entry.channel]
+          )
+          : await db.all(
+            'SELECT id, beat FROM order_customers WHERE company_id = ? AND name = ? COLLATE NOCASE',
+            [req.user.companyId, entry.name]
+          );
+      }
+      if (!matches.length) {
+        unmatched.push(entry.name);
+        continue;
+      }
+      for (const match of matches) {
+        if ((match.beat || '') === entry.beat) {
+          unchanged += 1;
+        } else {
+          await db.run('UPDATE order_customers SET beat = ? WHERE id = ?', [entry.beat, match.id]);
+          updated += 1;
+        }
+      }
+    }
+    await db.exec('COMMIT');
+    transactionOpen = false;
+    res.json({ updated, unchanged, unmatchedCount: unmatched.length, unmatched: unmatched.slice(0, 20) });
+  } catch (error) {
+    if (transactionOpen) await db.exec('ROLLBACK').catch(() => {});
+    console.error('Could not remap beats:', error);
+    res.status(500).json({ error: 'Could not update beats from the file. Please try again.' });
+  }
+});
+
 async function getVisibleCustomers(db, user, channel) {
   const params = channel === 'ALL' ? [user.companyId] : [user.companyId, channel];
   const channelFilter = channel === 'ALL' ? '' : "AND channel IN ('', ?)";

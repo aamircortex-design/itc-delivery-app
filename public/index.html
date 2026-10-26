@@ -279,6 +279,8 @@
             <p>Item master (price list .xlsx): Item Code (E), Item Description (F), Basic rate per M (O), GST = CGST (Q) + SGST (R), Net rate per M (T). Orders are taken in M (1 M = 1000 sticks) at the net rate; stock is not tracked. Customer file columns: Customer Name, Beat, optional Salesman, Channel (HORECA/ISS or blank), Address. Each upload replaces the previous data.</p>
             <label>Item master (price list) <input id="order-stock-file" type="file" accept=".xlsx,.csv"></label>
             <label>Customer master file <input id="order-customer-file" type="file" accept=".xlsx,.csv"></label>
+            <label>Update beats only (remap) <input id="order-beat-file" type="file" accept=".xlsx,.csv"></label>
+            <p>Beat remap only changes the Beat of outlets already in the master (matched by customer code, else name and channel). Locations, salesmen, addresses and other outlets are untouched; nothing is added or removed.</p>
             <p id="order-upload-status" role="status"></p>
             <button class="button button-secondary" type="button" id="clear-stock-master">Remove item master</button>
             <button class="button button-secondary" type="button" id="clear-customer-master">Remove customer master</button>
