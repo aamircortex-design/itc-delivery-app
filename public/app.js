@@ -1230,7 +1230,7 @@ async function loadWeeklyVisits() {
   }
 }
 
-function getCurrentOutletLocation(onAccuracy = () => {}) {
+function getCurrentOutletLocation(onAccuracy = () => {}, onStatus = () => {}) {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
       reject(new Error('This device does not support location capture.'));
@@ -1238,12 +1238,19 @@ function getCurrentOutletLocation(onAccuracy = () => {}) {
     }
     let bestPosition = null;
     let watchId = null;
+    let lowWatchId = null;
     let settled = false;
+    const startedAt = Date.now();
+    const tickId = window.setInterval(() => {
+      if (!bestPosition) onStatus(`Waiting for GPS · ${Math.round((Date.now() - startedAt) / 1000)}s`);
+    }, 1000);
     const finish = (error, position) => {
       if (settled) return;
       settled = true;
       window.clearTimeout(timerId);
+      window.clearInterval(tickId);
       if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      if (lowWatchId !== null) navigator.geolocation.clearWatch(lowWatchId);
       if (error) {
         reject(error);
         return;
@@ -1266,21 +1273,24 @@ function getCurrentOutletLocation(onAccuracy = () => {}) {
         ));
       }
     }, 60000);
-    watchId = navigator.geolocation.watchPosition(
-      position => {
-        if (!bestPosition || position.coords.accuracy < bestPosition.coords.accuracy) {
-          bestPosition = position;
-          onAccuracy(position.coords.accuracy);
-        }
-        if (position.coords.accuracy <= MAX_LOCATION_ACCURACY_METERS) finish(null, position);
-      },
-      error => {
-        if (error.code === 1) {
-          finish(new Error('Location permission was denied. Allow precise location access for Chrome in Android settings, then try again.'));
-        }
-      },
-      { enableHighAccuracy: true, timeout: 90000, maximumAge: 0 }
-    );
+    const onPosition = position => {
+      if (!bestPosition || position.coords.accuracy < bestPosition.coords.accuracy) {
+        bestPosition = position;
+        onAccuracy(position.coords.accuracy);
+      }
+      if (position.coords.accuracy <= MAX_LOCATION_ACCURACY_METERS) finish(null, position);
+    };
+    const onError = error => {
+      if (error.code === 1) {
+        finish(new Error('Location permission was denied. Allow precise location access for Chrome in Android settings, then try again.'));
+      }
+    };
+    onStatus('Waiting for location permission...');
+    watchId = navigator.geolocation.watchPosition(onPosition, onError,
+      { enableHighAccuracy: true, timeout: 90000, maximumAge: 0 });
+    // A coarse listener gives an immediate reading so the user sees progress.
+    lowWatchId = navigator.geolocation.watchPosition(onPosition, onError,
+      { enableHighAccuracy: false, timeout: 30000, maximumAge: 0 });
   });
 }
 
@@ -1301,7 +1311,9 @@ async function captureOutletLocation(button) {
   button.textContent = 'Getting GPS fix...';
   try {
     const location = await getCurrentOutletLocation(accuracy => {
-      button.textContent = `Getting GPS fix · ±${Math.round(accuracy)} m`;
+      button.textContent = `Getting GPS fix · ±${Math.round(accuracy)} m (need ${MAX_LOCATION_ACCURACY_METERS} m)`;
+    }, status => {
+      button.textContent = status;
     });
     validateLocationAccuracy(location.accuracy);
     button.textContent = 'Saving shop location...';
