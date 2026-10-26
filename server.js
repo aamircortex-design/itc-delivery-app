@@ -994,7 +994,9 @@ app.delete('/api/orders/customers', requireOrderAdmin, async (req, res) => {
 app.get('/api/orders/customers', requireOrderAdmin, async (req, res) => {
   try {
     const customers = await req.app.locals.db.all(
-      `SELECT id, beat, name, channel, salesman, address FROM order_customers
+      `SELECT id, beat, name, channel, salesman, address,
+              location_lat IS NOT NULL AND location_lng IS NOT NULL AS locationCaptured
+       FROM order_customers
        WHERE company_id = ? ORDER BY beat COLLATE NOCASE, name COLLATE NOCASE`,
       [req.user.companyId]
     );
@@ -1002,6 +1004,27 @@ app.get('/api/orders/customers', requireOrderAdmin, async (req, res) => {
   } catch (error) {
     console.error('Could not load customer master:', error);
     res.status(500).json({ error: 'Could not load the customer master.' });
+  }
+});
+
+app.delete('/api/orders/customers/:id/location', requireOrderAdmin, async (req, res) => {
+  const customerId = Number(req.params.id);
+  if (!Number.isSafeInteger(customerId) || customerId < 1) {
+    return res.status(400).json({ error: 'Choose a valid outlet.' });
+  }
+  try {
+    const result = await req.app.locals.db.run(
+      `UPDATE order_customers
+       SET location_lat = NULL, location_lng = NULL, location_captured_at = NULL, location_captured_by = NULL
+       WHERE id = ? AND company_id = ?
+         AND location_lat IS NOT NULL AND location_lng IS NOT NULL`,
+      [customerId, req.user.companyId]
+    );
+    if (!result.changes) return res.status(404).json({ error: 'This outlet has no saved location to reset.' });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Could not reset outlet location:', error);
+    res.status(500).json({ error: 'Could not reset this outlet location.' });
   }
 });
 

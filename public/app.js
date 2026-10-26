@@ -1297,7 +1297,10 @@ function renderCustomerMaster() {
   document.querySelector('#master-empty').hidden = customerMaster.length > 0;
   document.querySelector('#master-rows').innerHTML = rows.map(customer => `
     <tr><td>${escapeHtml(customer.beat)}</td><td>${escapeHtml(customer.name)}</td><td>${escapeHtml(customer.channel || 'Both')}</td>
-    <td>${escapeHtml(customer.salesman)}</td><td>${escapeHtml(customer.address)}</td></tr>`).join('');
+    <td>${escapeHtml(customer.salesman)}</td><td>${escapeHtml(customer.address)}</td>
+    <td>${customer.locationCaptured
+      ? `<button class="button button-secondary" type="button" data-reset-customer-location="${customer.id}">Reset location</button>`
+      : 'Not captured'}</td></tr>`).join('');
 }
 
 async function loadCustomerMaster() {
@@ -1306,6 +1309,21 @@ async function loadCustomerMaster() {
     renderCustomerMaster();
   } catch (error) {
     showToast(error.message, true);
+  }
+}
+
+async function resetCustomerLocation(button) {
+  const customerId = Number(button.dataset.resetCustomerLocation);
+  const customer = customerMaster.find(entry => entry.id === customerId);
+  if (!customer || !window.confirm(`Clear the saved shop location for ${customer.name}? The salesman can capture it again on the next visit. Visit records will be kept.`)) return;
+  button.disabled = true;
+  try {
+    await requestJson(`/api/orders/customers/${customerId}/location`, { method: 'DELETE' });
+    showToast('Saved shop location cleared. The salesman can capture it again on the next visit.');
+    await loadCustomerMaster();
+  } catch (error) {
+    showToast(error.message, true);
+    button.disabled = false;
   }
 }
 
@@ -1413,6 +1431,10 @@ function initializeOrdersInterface() {
   });
   document.querySelector('#clear-stock-master').addEventListener('click', () => clearOrderMaster('stock', 'item master'));
   document.querySelector('#clear-customer-master').addEventListener('click', () => clearOrderMaster('customers', 'customer master'));
+  document.querySelector('#master-rows').addEventListener('click', event => {
+    const button = event.target.closest('[data-reset-customer-location]');
+    if (button) resetCustomerLocation(button);
+  });
   document.querySelector('#order-search').addEventListener('input', renderOrderStock);
   document.querySelector('#order-brand-chips').addEventListener('click', event => {
     const chip = event.target.closest('[data-brand]');
