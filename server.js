@@ -553,8 +553,9 @@ app.get('/api/users', async (req, res) => {
 });
 
 app.get('/api/rt-damage', async (req, res) => {
-  const damageDate = normalizeDeliveryDate(req.query.date);
-  if (!damageDate) {
+  const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(req.query.month || '')) ? String(req.query.month) : '';
+  const damageDate = month ? '' : normalizeDeliveryDate(req.query.date);
+  if (!month && !damageDate) {
     return res.status(400).json({ error: 'Choose a valid date to view RT damage reports.' });
   }
   try {
@@ -575,9 +576,9 @@ app.get('/api/rt-damage', async (req, res) => {
        FROM rt_damage_reports
        LEFT JOIN users ON users.id = rt_damage_reports.user_id
        LEFT JOIN users AS reviewer ON reviewer.id = rt_damage_reports.reviewed_by
-       WHERE rt_damage_reports.company_id = ? AND rt_damage_reports.damage_date = ?
-       ORDER BY rt_damage_reports.created_at DESC, rt_damage_reports.id DESC`,
-      [req.user.companyId, damageDate]
+       WHERE rt_damage_reports.company_id = ? AND ${month ? "substr(rt_damage_reports.damage_date, 1, 7) = ?" : 'rt_damage_reports.damage_date = ?'}
+       ORDER BY rt_damage_reports.damage_date DESC, rt_damage_reports.created_at DESC, rt_damage_reports.id DESC`,
+      [req.user.companyId, month || damageDate]
     );
     res.json(reports.map(report => ({
       ...report,

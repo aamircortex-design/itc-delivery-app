@@ -2705,11 +2705,18 @@ async function saveReconciliation(event) {
 async function loadDamageReports() {
   const reportList = document.querySelector('#damage-report-list');
   const reportDate = document.querySelector('#rt-damage-date').value || selectedDeliveryDate;
-  document.querySelector('#damage-history-date').textContent = `· ${formatDate(reportDate)}`;
+  const monthView = document.querySelector('#damage-view-scope').value === 'month';
+  const reportMonth = String(reportDate).slice(0, 7);
+  const scopeLabel = monthView
+    ? new Date(`${reportMonth}-01T00:00:00`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+    : formatDate(reportDate);
+  document.querySelector('#damage-history-date').textContent = `· ${scopeLabel}`;
   try {
-    const reports = await requestJson(`/api/rt-damage?date=${encodeURIComponent(reportDate)}`);
+    const reports = await requestJson(monthView
+      ? `/api/rt-damage?month=${encodeURIComponent(reportMonth)}`
+      : `/api/rt-damage?date=${encodeURIComponent(reportDate)}`);
     if (!reports.length) {
-      reportList.innerHTML = `<p class="damage-history-empty">No RT damage reports for ${escapeHtml(formatDate(reportDate))}.</p>`;
+      reportList.innerHTML = `<p class="damage-history-empty">No RT damage reports for ${escapeHtml(scopeLabel)}.</p>`;
       return;
     }
     reportList.innerHTML = reports.map(report => {
@@ -2730,6 +2737,7 @@ async function loadDamageReports() {
           </a>` : ''}
           <span class="damage-report-details">
             <strong>RT ${escapeHtml(report.rtNumber)} · ${escapeHtml(report.outletName || 'Outlet not recorded')}</strong>
+            <span>Damage date: ${escapeHtml(formatDate(report.damageDate))}</span>
             <span>Agent: ${escapeHtml(report.agentName || 'Not recorded')} · Submitted by ${escapeHtml(report.submittedBy)} · ${escapeHtml(formatDate(report.createdAt))}</span>
             <span class="damage-approval-status ${approvalClass}">${escapeHtml(report.approvalStatus)}</span>
             ${report.rtEntryMonth ? `<span>RT entered in: ${escapeHtml(new Date(`${report.rtEntryMonth}-01T00:00:00`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }))}</span>` : ''}
@@ -2845,6 +2853,7 @@ document.querySelector('#cancel-edit-rt-damage').addEventListener('click', () =>
 });
 document.querySelector('#refresh-damage-reports').addEventListener('click', loadDamageReports);
 document.querySelector('#rt-damage-date').addEventListener('change', loadDamageReports);
+document.querySelector('#damage-view-scope').addEventListener('change', loadDamageReports);
 document.querySelector('#export-rt-damage').addEventListener('click', event => {
   const damageDate = document.querySelector('#rt-damage-date').value;
   if (!damageDate) {
