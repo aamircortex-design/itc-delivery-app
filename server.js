@@ -1303,14 +1303,14 @@ app.get('/api/orders/visits/export', requireOrderManager, async (req, res) => {
     const outcomeLabels = { order_taken: 'Order taken', outstanding_not_cleared: 'Outstanding not cleared', order_not_given: 'Order not given' };
     const locationLabels = { first_capture: 'Location captured (first visit)', at_shop: 'At shop', away: 'Not at shop' };
     const rows = [
-      ['Date', 'Beat', 'Outlet ID', 'Outlet Name', 'Channel', 'Salesman', 'Visited', 'Outcome', 'Outstanding Amount', 'Location Check', 'Distance from Shop (m)', 'Visit Time (UTC)', 'Visit Map'],
+      ['Date', 'Beat', 'Outlet ID', 'Outlet Name', 'Channel', 'Salesman', 'Visited', 'Outcome', 'Outstanding Amount', 'Location Check', 'Distance from Shop (m)', 'Visit Time (IST)', 'Visit Map'],
       ...data.map(row => [
         weekKey, row.beat, row.customerCode, row.customerName, row.channel,
         row.visitedBy || row.assignedSalesman, row.outcome ? 'Yes' : 'No',
         outcomeLabels[row.outcome] || '', row.outcome === 'outstanding_not_cleared' ? row.outstandingAmount : '',
         row.outcome ? (row.locationCaptured ? (locationLabels[row.locationStatus] || 'Not recorded') : 'Location not yet captured') : '',
         row.outcome && row.locationCaptured && row.locationStatus === 'away' ? Math.round(row.distanceMeters) : '',
-        row.visitedAt || '',
+        row.visitedAt ? new Date(`${String(row.visitedAt).replace(' ', 'T')}Z`).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) : '',
         row.visitLat === null || row.visitLat === undefined ? '' : `https://www.google.com/maps?q=${row.visitLat},${row.visitLng}`
       ])
     ];

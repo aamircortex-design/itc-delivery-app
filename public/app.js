@@ -68,6 +68,19 @@ function formatDate(value) {
   }).format(date);
 }
 
+function formatIstDateTime(value) {
+  if (!value) return '';
+  const date = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(value) ? value : `${String(value).replace(' ', 'T')}Z`);
+  return Number.isNaN(date.getTime()) ? String(value) : new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  }).format(date);
+}
+
 function formatDateTime(value) {
   if (!value) return '';
   const date = new Date(value);
@@ -1117,7 +1130,7 @@ function renderVisitReport() {
           <p>${escapeHtml(row.beat || 'No beat')} · ${escapeHtml(row.channel || 'Both channels')} · ${escapeHtml(row.visitedBy || row.assignedSalesman || 'No salesman')}</p></div>
         ${badge}
       </div>
-      <p class="visit-saved">${outcome}${row.visitedAt ? ` · ${escapeHtml(row.visitedAt)} UTC` : ''}</p>
+      <p class="visit-saved">${outcome}${row.visitedAt ? ` · ${escapeHtml(formatIstDateTime(row.visitedAt))} IST` : ''}</p>
       ${links ? `<p class="weekly-visits-help">${links}</p>` : ''}
     </article>`;
   }).join('');
