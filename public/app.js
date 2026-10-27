@@ -2860,8 +2860,10 @@ document.querySelector('#export-rt-damage').addEventListener('click', event => {
     document.querySelector('#rt-damage-date').reportValidity();
     return;
   }
-  const date = encodeURIComponent(damageDate);
-  downloadExcelReport(`/api/rt-damage/export?date=${date}`, `RT-Damage-${damageDate}.xlsx`, event.currentTarget);
+  const monthView = document.querySelector('#damage-view-scope').value === 'month';
+  const period = monthView ? damageDate.slice(0, 7) : damageDate;
+  const param = encodeURIComponent(period);
+  downloadExcelReport(`/api/rt-damage/export?${monthView ? 'month' : 'date'}=${param}`, `RT-Damage-${period}.xlsx`, event.currentTarget);
 });
 damageForm.addEventListener('submit', saveDamageReport);
 document.querySelector('#damage-report-list').addEventListener('click', async event => {

@@ -591,10 +591,12 @@ app.get('/api/rt-damage', async (req, res) => {
 });
 
 app.get('/api/rt-damage/export', async (req, res) => {
-  const damageDate = normalizeDeliveryDate(req.query.date);
-  if (!damageDate) {
+  const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(req.query.month || '')) ? String(req.query.month) : '';
+  const damageDate = month ? '' : normalizeDeliveryDate(req.query.date);
+  if (!month && !damageDate) {
     return res.status(400).json({ error: 'Choose a valid date to export RT damage reports.' });
   }
+  const periodLabel = month || damageDate;
   try {
     const reports = await req.app.locals.db.all(
       `SELECT r.id, r.rt_number AS rtNumber, r.outlet_name AS outletName,
@@ -607,12 +609,12 @@ app.get('/api/rt-damage/export', async (req, res) => {
        FROM rt_damage_reports r
        LEFT JOIN users AS submitter ON submitter.id = r.user_id
        LEFT JOIN users AS reviewer ON reviewer.id = r.reviewed_by
-       WHERE r.company_id = ? AND r.damage_date = ?
-       ORDER BY r.created_at, r.id`,
-      [req.user.companyId, damageDate]
+       WHERE r.company_id = ? AND ${month ? 'substr(r.damage_date, 1, 7) = ?' : 'r.damage_date = ?'}
+       ORDER BY r.damage_date, r.created_at, r.id`,
+      [req.user.companyId, month || damageDate]
     );
     if (!reports.length) {
-      return res.status(404).json({ error: `There are no RT damage reports for ${formatSalesDate(damageDate)} to export.` });
+      return res.status(404).json({ error: `There are no RT damage reports for ${month || formatSalesDate(damageDate)} to export.` });
     }
     const rows = [[
       'RT Date', 'RT Number', 'Outlet Name', 'Delivery Agent', 'Submitted By',
@@ -639,7 +641,7 @@ app.get('/api/rt-damage/export', async (req, res) => {
     }]);
     res.set({
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': `attachment; filename="RT-Damage-${damageDate}.xlsx"`,
+      'Content-Disposition': `attachment; filename="RT-Damage-${periodLabel}.xlsx"`,
       'Content-Length': workbook.length,
       'Cache-Control': 'no-store'
     });
