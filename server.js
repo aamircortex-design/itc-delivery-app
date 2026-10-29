@@ -665,10 +665,9 @@ function requireUobAccess(req, res, next) {
 async function getUobData(db, companyId, fromDate = '', toDate = '') {
   const bills = await db.all(
     `SELECT b.bill_no AS billNo, b.outlet_name AS outletName, b.delivery_date AS deliveryDate,
-            substr(b.created_at, 1, 10) AS createdDate, c.amount_collected AS collected
+            substr(b.created_at, 1, 10) AS createdDate
      FROM bills b
      JOIN users u ON u.id = b.assigned_to
-     LEFT JOIN uob_collections c ON c.company_id = b.company_id AND c.bill_no = b.bill_no
      WHERE b.company_id = ? AND ${isUobAgentSql}`,
     [companyId]
   );
@@ -699,7 +698,6 @@ async function getUobData(db, companyId, fromDate = '', toDate = '') {
       || (/^\d{4}-\d{2}-\d{2}$/.test(bill.deliveryDate) ? bill.deliveryDate : bill.createdDate);
     if ((fromDate && billDate < fromDate) || (toDate && billDate > toDate)) continue;
     const totalValue = roundMoney(items.reduce((sum, item) => sum + item.amount, 0));
-    const collected = bill.collected === null || bill.collected === undefined ? null : roundMoney(bill.collected);
     result.push({
       billNo: bill.billNo,
       outletName: bill.outletName,
@@ -707,9 +705,7 @@ async function getUobData(db, companyId, fromDate = '', toDate = '') {
       items,
       totalQty: items.reduce((sum, item) => sum + item.quantity, 0),
       totalValue,
-      hasValue: items.length > 0,
-      collected,
-      difference: collected === null ? null : roundMoney(collected - totalValue)
+      hasValue: items.length > 0
     });
   }
   result.sort((left, right) => left.billDate.localeCompare(right.billDate) || left.billNo.localeCompare(right.billNo, undefined, { numeric: true }));
@@ -723,24 +719,27 @@ async function getUobData(db, companyId, fromDate = '', toDate = '') {
       itemSummary.set(item.itemName.toLowerCase(), entry);
     }
   }
-  const settled = result.filter(bill => bill.collected !== null);
+  const payments = await db.all(
+    `SELECT id, collected_date AS collectedDate, amount, note, created_by AS createdBy
+     FROM uob_payments
+     WHERE company_id = ? AND (? = '' OR collected_date >= ?) AND (? = '' OR collected_date <= ?)
+     ORDER BY collected_date, id`,
+    [companyId, fromDate, fromDate, toDate, toDate]
+  );
   const totalBilled = roundMoney(result.reduce((sum, bill) => sum + bill.totalValue, 0));
-  const settledBilled = roundMoney(settled.reduce((sum, bill) => sum + bill.totalValue, 0));
-  const totalCollected = roundMoney(settled.reduce((sum, bill) => sum + bill.collected, 0));
-  const difference = roundMoney(totalCollected - settledBilled);
+  const totalCollected = roundMoney(payments.reduce((sum, payment) => sum + payment.amount, 0));
+  const difference = roundMoney(totalCollected - totalBilled);
   return {
     bills: result,
+    payments,
     items: [...itemSummary.values()].sort((left, right) => left.itemName.localeCompare(right.itemName)),
     totals: {
       billCount: result.length,
-      settledCount: settled.length,
-      pendingCount: result.length - settled.length,
       totalQty: result.reduce((sum, bill) => sum + bill.totalQty, 0),
       totalBilled,
-      settledBilled,
       totalCollected,
       difference,
-      outcome: !settled.length ? 'pending' : difference > 0 ? 'profit' : difference < 0 ? 'loss' : 'even'
+      outcome: !payments.length ? 'pending' : difference > 0 ? 'profit' : difference < 0 ? 'loss' : 'even'
     }
   };
 }
@@ -765,37 +764,39 @@ app.get('/api/uob', requireUobAccess, async (req, res) => {
   }
 });
 
-app.put('/api/uob/bills/:billNo/collection', requireUobAccess, async (req, res) => {
-  const billNo = String(req.params.billNo || '').trim();
-  const raw = req.body?.amount;
-  const clear = raw === null || raw === '';
-  const amount = Number(raw);
-  if (!clear && (!Number.isFinite(amount) || amount < 0 || amount > 1e9)) {
-    return res.status(400).json({ error: 'Enter a valid amount collected (0 or more).' });
+app.post('/api/uob/payments', requireUobAccess, async (req, res) => {
+  const amount = Number(req.body?.amount);
+  const collectedDate = String(req.body?.date || '');
+  const note = String(req.body?.note || '').trim().slice(0, 200);
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 1e9) {
+    return res.status(400).json({ error: 'Enter the amount collected (greater than 0).' });
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(collectedDate)) {
+    return res.status(400).json({ error: 'Choose the date the amount was collected.' });
   }
   try {
-    const db = req.app.locals.db;
-    const bill = await db.get(
-      `SELECT b.bill_no AS billNo FROM bills b JOIN users u ON u.id = b.assigned_to
-       WHERE b.company_id = ? AND b.bill_no = ? AND ${isUobAgentSql}`,
-      [req.user.companyId, billNo]
+    await req.app.locals.db.run(
+      'INSERT INTO uob_payments (company_id, collected_date, amount, note, created_by) VALUES (?, ?, ?, ?, ?)',
+      [req.user.companyId, collectedDate, roundMoney(amount), note, req.user.fullName || '']
     );
-    if (!bill) return res.status(404).json({ error: 'This bill is not assigned to UOB.' });
-    if (clear) {
-      await db.run('DELETE FROM uob_collections WHERE company_id = ? AND bill_no = ?', [req.user.companyId, bill.billNo]);
-    } else {
-      await db.run(
-        `INSERT INTO uob_collections (company_id, bill_no, amount_collected, updated_by, updated_at)
-         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-         ON CONFLICT(company_id, bill_no) DO UPDATE SET
-           amount_collected = excluded.amount_collected, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP`,
-        [req.user.companyId, bill.billNo, roundMoney(amount), req.user.fullName || '']
-      );
-    }
-    res.json({ ok: true });
+    res.status(201).json({ ok: true });
   } catch (error) {
     console.error('Could not save UOB collection:', error);
     res.status(500).json({ error: 'Could not save the amount collected. Please try again.' });
+  }
+});
+
+app.delete('/api/uob/payments/:id', requireUobAccess, async (req, res) => {
+  try {
+    const result = await req.app.locals.db.run(
+      'DELETE FROM uob_payments WHERE id = ? AND company_id = ?',
+      [Number(req.params.id), req.user.companyId]
+    );
+    if (!result.changes) return res.status(404).json({ error: 'That collection entry was not found.' });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Could not delete UOB collection:', error);
+    res.status(500).json({ error: 'Could not remove the collection entry. Please try again.' });
   }
 });
 
@@ -804,25 +805,33 @@ app.get('/api/uob/export', requireUobAccess, async (req, res) => {
     const { fromDate, toDate } = uobFilters(req.query);
     const data = await getUobData(req.app.locals.db, req.user.companyId, fromDate, toDate);
     if (!data.bills.length) return res.status(404).json({ error: 'There are no UOB bills to export.' });
-    const rows = [['Bill Date', 'Bill No', 'Outlet', 'Item', 'Qty', 'Item Value', 'Bill Total', 'Amount Collected', 'Difference (Collected - Billed)', 'Result']];
+    const rows = [['Bill Date', 'Bill No', 'Outlet', 'Item', 'Qty', 'Item Value', 'Bill Total']];
     for (const bill of data.bills) {
-      const result = bill.collected === null ? 'Collection pending' : bill.difference > 0 ? 'Profit' : bill.difference < 0 ? 'Loss' : 'Even';
-      if (!bill.items.length) rows.push([bill.billDate, bill.billNo, bill.outletName, 'No sales-register items', '', '', bill.totalValue, bill.collected ?? '', bill.difference ?? '', result]);
-      bill.items.forEach(item => rows.push([bill.billDate, bill.billNo, bill.outletName, item.itemName, item.quantity, item.amount, '', '', '', '']));
-      rows.push([bill.billDate, bill.billNo, bill.outletName, 'BILL TOTAL', bill.totalQty, '', bill.totalValue, bill.collected ?? '', bill.difference ?? '', result]);
+      if (!bill.items.length) rows.push([bill.billDate, bill.billNo, bill.outletName, 'No sales-register items', '', '', bill.totalValue]);
+      bill.items.forEach(item => rows.push([bill.billDate, bill.billNo, bill.outletName, item.itemName, item.quantity, item.amount, '']));
+      rows.push([bill.billDate, bill.billNo, bill.outletName, 'BILL TOTAL', bill.totalQty, '', bill.totalValue]);
     }
     const t = data.totals;
-    const verdict = { profit: 'SOLD FOR MORE than billed (profit)', loss: 'SOLD FOR LESS than billed (loss)', even: 'Sold for exactly the billed value', pending: 'No collections entered yet' }[t.outcome];
+    const verdict = {
+      profit: `SOLD FOR MORE than billed (profit of ${t.difference})`,
+      loss: `SOLD FOR LESS than billed (loss of ${Math.abs(t.difference)})`,
+      even: 'Sold for exactly the billed value',
+      pending: 'No collections entered yet'
+    }[t.outcome];
     rows.push([], ['SUMMARY'],
-      ['Total bills', t.billCount], ['Bills with collection entered', t.settledCount], ['Bills pending collection', t.pendingCount],
-      ['Total items (qty)', t.totalQty], ['Total billed value (all bills)', t.totalBilled],
-      ['Billed value of bills with collection', t.settledBilled], ['Total amount collected', t.totalCollected],
+      ['Period', `${fromDate || 'start'} to ${toDate || 'today'}`],
+      ['Total bills', t.billCount], ['Total items (qty)', t.totalQty],
+      ['Total billed value', t.totalBilled], ['Total amount collected (cumulative)', t.totalCollected],
       ['Difference (Collected - Billed)', t.difference], ['Overall result', verdict]);
     const summaryRows = [['Item', 'Total Qty', 'Total Billed Value'], ...data.items.map(item => [item.itemName, item.quantity, item.amount]),
       ['TOTAL', t.totalQty, t.totalBilled]];
+    const paymentRows = [['Collected Date', 'Amount', 'Note', 'Entered By'],
+      ...data.payments.map(payment => [payment.collectedDate, payment.amount, payment.note, payment.createdBy]),
+      ['TOTAL COLLECTED', t.totalCollected, '', '']];
     const workbook = createWorkbook([
       { name: 'UOB Bills', rows, autoFilterRow: 1 },
-      { name: 'Item Summary', rows: summaryRows, autoFilterRow: 1 }
+      { name: 'Item Summary', rows: summaryRows, autoFilterRow: 1 },
+      { name: 'Collections', rows: paymentRows, autoFilterRow: 1 }
     ]);
     res.set({
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

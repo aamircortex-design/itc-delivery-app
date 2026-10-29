@@ -2162,20 +2162,27 @@ function renderUob(data) {
   const totals = data.totals;
   document.querySelector('#uob-notice').hidden = data.agentFound;
   document.querySelector('#uob-notice').textContent = 'No delivery agent named “UOB” exists yet. Create a user named UOB and assign bills to it.';
-  document.querySelector('#uob-bill-count').textContent = `${totals.billCount} (${totals.settledCount} collected)`;
+  document.querySelector('#uob-bill-count').textContent = String(totals.billCount);
   document.querySelector('#uob-total-billed').textContent = formatCurrency(totals.totalBilled);
   document.querySelector('#uob-total-collected').textContent = formatCurrency(totals.totalCollected);
   const differenceElement = document.querySelector('#uob-difference');
   differenceElement.textContent = totals.outcome === 'pending'
     ? '—'
-    : `${totals.difference > 0 ? '+' : ''}${formatCurrency(totals.difference)} ${totals.outcome === 'profit' ? 'Profit' : totals.outcome === 'loss' ? 'Loss' : ''}`.trim();
+    : `${totals.difference > 0 ? '+' : ''}${formatCurrency(totals.difference)} ${totals.outcome === 'profit' ? 'Profit' : totals.outcome === 'loss' ? 'Loss' : 'Even'}`;
   differenceElement.style.color = totals.outcome === 'profit' ? '#1f9d55' : totals.outcome === 'loss' ? '#d64545' : '';
   document.querySelector('#uob-outcome').textContent = {
     profit: 'These products were sold for MORE than the billed value.',
     loss: 'These products were sold for LESS than the billed value.',
     even: 'These products were sold for exactly the billed value.',
-    pending: 'Enter the amount collected against each bill to see profit or loss.'
-  }[totals.outcome] + (totals.pendingCount && totals.settledCount ? ` Profit/loss covers only the ${totals.settledCount} bills with collection entered (${totals.pendingCount} pending).` : '');
+    pending: 'Add the amount collected to see profit or loss.'
+  }[totals.outcome];
+  document.querySelector('#uob-payment-rows').innerHTML = data.payments.map(payment => `<tr>
+    <td data-label="Date">${escapeHtml(formatDate(payment.collectedDate))}</td>
+    <td data-label="Amount">${formatCurrency(payment.amount)}</td>
+    <td data-label="Note">${escapeHtml(payment.note)}</td>
+    <td data-label="Entered by">${escapeHtml(payment.createdBy)}</td>
+    <td><button class="text-link" type="button" data-uob-delete="${Number(payment.id)}">Remove</button></td>
+  </tr>`).join('');
   document.querySelector('#uob-item-rows').innerHTML = data.items.map(item => `<tr>
     <td data-label="Item">${escapeHtml(item.itemName)}</td>
     <td data-label="Total qty">${Number(item.quantity).toLocaleString()}</td>
@@ -2183,10 +2190,6 @@ function renderUob(data) {
   </tr>`).join('') + (data.items.length ? `<tr><td><strong>Total</strong></td><td><strong>${Number(totals.totalQty).toLocaleString()}</strong></td><td><strong>${formatCurrency(totals.totalBilled)}</strong></td></tr>` : '');
   document.querySelector('#uob-empty').hidden = data.bills.length > 0;
   document.querySelector('#uob-bill-rows').innerHTML = data.bills.map(bill => {
-    const diffClass = bill.difference === null ? '' : bill.difference < 0 ? 'color:#d64545' : bill.difference > 0 ? 'color:#1f9d55' : '';
-    const diffText = bill.difference === null
-      ? 'Pending'
-      : `${bill.difference > 0 ? '+' : ''}${formatCurrency(bill.difference)} ${bill.difference > 0 ? 'Profit' : bill.difference < 0 ? 'Loss' : 'Even'}`;
     const itemList = bill.items.length
       ? `<details><summary>${bill.items.length} item${bill.items.length === 1 ? '' : 's'}</summary>${bill.items.map(item => `<div>${escapeHtml(item.itemName)} · ${Number(item.quantity).toLocaleString()} · ${formatCurrency(item.amount)}</div>`).join('')}</details>`
       : 'No sales-register data';
@@ -2196,13 +2199,13 @@ function renderUob(data) {
       <td data-label="Outlet">${escapeHtml(bill.outletName)}</td>
       <td data-label="Items">${itemList}</td>
       <td data-label="Bill value">${formatCurrency(bill.totalValue)}</td>
-      <td data-label="Amount collected"><input type="number" min="0" step="0.01" inputmode="decimal" class="uob-collected" style="width:7.5rem" aria-label="Amount collected for bill ${escapeHtml(bill.billNo)}" value="${bill.collected === null ? '' : bill.collected}" data-bill-value="${bill.totalValue}" data-uob-bill="${escapeHtml(bill.billNo)}"> <button class="button button-secondary" type="button" data-uob-save="${escapeHtml(bill.billNo)}">Save</button></td>
-      <td data-label="Difference" class="uob-diff" style="${diffClass}">${escapeHtml(diffText)}</td>
     </tr>`;
   }).join('');
 }
 
 async function loadUob() {
+  const payDate = document.querySelector('#uob-pay-date');
+  if (!payDate.value) payDate.value = getLocalDateValue();
   try {
     renderUob(await requestJson(`/api/uob?${uobQuery()}`, { cache: 'no-store' }));
   } catch (error) {
@@ -3137,35 +3140,38 @@ document.querySelector('#uob-export').addEventListener('click', event => {
   const query = uobQuery();
   downloadExcelReport(`/api/uob/export${query ? `?${query}` : ''}`, 'UOB-Bills.xlsx', event.currentTarget);
 });
-document.querySelector('#uob-bill-rows').addEventListener('input', event => {
-  const input = event.target.closest('.uob-collected');
-  if (!input) return;
-  const cell = input.closest('tr').querySelector('.uob-diff');
-  if (input.value === '') {
-    cell.textContent = 'Pending';
-    cell.style.color = '';
-    return;
-  }
-  const difference = Math.round((Number(input.value) - Number(input.dataset.billValue)) * 100) / 100;
-  cell.textContent = `${difference > 0 ? '+' : ''}${formatCurrency(difference)} ${difference > 0 ? 'Profit' : difference < 0 ? 'Loss' : 'Even'}`;
-  cell.style.color = difference > 0 ? '#1f9d55' : difference < 0 ? '#d64545' : '';
-});
-document.querySelector('#uob-bill-rows').addEventListener('click', async event => {
-  const button = event.target.closest('[data-uob-save]');
-  if (!button) return;
-  const input = button.closest('tr').querySelector('.uob-collected');
+document.querySelector('#uob-payment-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector('button[type="submit"]');
   button.disabled = true;
   try {
-    await requestJson(`/api/uob/bills/${encodeURIComponent(button.dataset.uobSave)}/collection`, {
-      method: 'PUT',
+    await requestJson('/api/uob/payments', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount: input.value === '' ? null : Number(input.value) })
+      body: JSON.stringify({
+        date: document.querySelector('#uob-pay-date').value,
+        amount: Number(document.querySelector('#uob-pay-amount').value),
+        note: document.querySelector('#uob-pay-note').value
+      })
     });
-    showToast('Amount collected saved.');
+    document.querySelector('#uob-pay-amount').value = '';
+    document.querySelector('#uob-pay-note').value = '';
+    showToast('Collection added.');
     await loadUob();
   } catch (error) {
     showToast(error.message, true);
+  } finally {
     button.disabled = false;
+  }
+});
+document.querySelector('#uob-payment-rows').addEventListener('click', async event => {
+  const button = event.target.closest('[data-uob-delete]');
+  if (!button || !window.confirm('Remove this collection entry?')) return;
+  try {
+    await requestJson(`/api/uob/payments/${encodeURIComponent(button.dataset.uobDelete)}`, { method: 'DELETE' });
+    await loadUob();
+  } catch (error) {
+    showToast(error.message, true);
   }
 });
 for (const source of ['profitability', 'deliveries']) {

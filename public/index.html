@@ -352,10 +352,19 @@
               <article class="profitability-summary-card"><span>Profit / loss</span><strong id="uob-difference">—</strong></article>
             </div>
             <p id="uob-outcome" role="status"></p>
+            <h3>Amount collected (cumulative)</h3>
+            <p class="profitability-format-hint">UOB stock is sold in bulk, so enter each amount you receive here. The total of all collections is compared with the total billed value of the bills in the From / To period above.</p>
+            <form class="orders-filters" id="uob-payment-form">
+              <label>Date collected <input id="uob-pay-date" type="date" required></label>
+              <label>Amount <input id="uob-pay-amount" type="number" min="0.01" step="0.01" inputmode="decimal" required></label>
+              <label>Note <input id="uob-pay-note" type="text" maxlength="200" placeholder="Optional"></label>
+              <button class="button" type="submit">Add collection</button>
+            </form>
+            <div class="table-scroll"><table><thead><tr><th>Date</th><th>Amount</th><th>Note</th><th>Entered by</th><th></th></tr></thead><tbody id="uob-payment-rows"></tbody></table></div>
             <h3>Items billed (all UOB bills)</h3>
             <div class="table-scroll"><table><thead><tr><th>Item</th><th>Total qty</th><th>Billed value</th></tr></thead><tbody id="uob-item-rows"></tbody></table></div>
             <h3>Bills</h3>
-            <div class="table-scroll"><table><thead><tr><th>Date</th><th>Bill no</th><th>Outlet</th><th>Items</th><th>Bill value</th><th>Amount collected</th><th>Difference</th></tr></thead><tbody id="uob-bill-rows"></tbody></table></div>
+            <div class="table-scroll"><table><thead><tr><th>Date</th><th>Bill no</th><th>Outlet</th><th>Items</th><th>Bill value</th></tr></thead><tbody id="uob-bill-rows"></tbody></table></div>
             <p class="at-stock-empty" id="uob-empty" hidden>No bills are assigned to UOB yet.</p>
           </section>
         </div>

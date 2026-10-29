@@ -159,13 +159,14 @@ async function initDb() {
       vehicle_amount REAL NOT NULL DEFAULT 0,
       PRIMARY KEY (company_id, expense_date)
     );
-    CREATE TABLE IF NOT EXISTS uob_collections (
+    CREATE TABLE IF NOT EXISTS uob_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
       company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-      bill_no TEXT NOT NULL COLLATE NOCASE,
-      amount_collected REAL NOT NULL CHECK (amount_collected >= 0),
-      updated_by TEXT NOT NULL DEFAULT '',
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (company_id, bill_no)
+      collected_date TEXT NOT NULL,
+      amount REAL NOT NULL CHECK (amount >= 0),
+      note TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS sales_orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
