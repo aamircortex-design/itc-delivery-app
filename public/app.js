@@ -380,6 +380,7 @@ async function loadCurrentUser() {
   document.querySelector('#delivery-bill-tracker').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#k4-link').hidden = user.role !== 'admin';
   document.querySelector('#horeca-link').hidden = !['admin', 'manager', 'horeca_iss_ds'].includes(user.role);
+  document.querySelector('#uob-link').hidden = !['admin', 'manager'].includes(user.role);
     if (user.role === 'horeca_iss_ds') {
       for (const id of ['overview-link', 'deliveries-link', 'open-rt-damage', 'profitability-link', 'at-stock-link', 'k4-link', 'user-management-link']) {
         document.querySelector(`#${id}`).hidden = true;
@@ -2148,6 +2149,67 @@ async function uploadProfitabilityCostsFile(file) {
   }
 }
 
+function uobQuery() {
+  const params = new URLSearchParams();
+  const from = document.querySelector('#uob-from').value;
+  const to = document.querySelector('#uob-to').value;
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  return params.toString();
+}
+
+function renderUob(data) {
+  const totals = data.totals;
+  document.querySelector('#uob-notice').hidden = data.agentFound;
+  document.querySelector('#uob-notice').textContent = 'No delivery agent named “UOB” exists yet. Create a user named UOB and assign bills to it.';
+  document.querySelector('#uob-bill-count').textContent = `${totals.billCount} (${totals.settledCount} collected)`;
+  document.querySelector('#uob-total-billed').textContent = formatCurrency(totals.totalBilled);
+  document.querySelector('#uob-total-collected').textContent = formatCurrency(totals.totalCollected);
+  const differenceElement = document.querySelector('#uob-difference');
+  differenceElement.textContent = totals.outcome === 'pending'
+    ? '—'
+    : `${totals.difference > 0 ? '+' : ''}${formatCurrency(totals.difference)} ${totals.outcome === 'profit' ? 'Profit' : totals.outcome === 'loss' ? 'Loss' : ''}`.trim();
+  differenceElement.style.color = totals.outcome === 'profit' ? '#1f9d55' : totals.outcome === 'loss' ? '#d64545' : '';
+  document.querySelector('#uob-outcome').textContent = {
+    profit: 'These products were sold for MORE than the billed value.',
+    loss: 'These products were sold for LESS than the billed value.',
+    even: 'These products were sold for exactly the billed value.',
+    pending: 'Enter the amount collected against each bill to see profit or loss.'
+  }[totals.outcome] + (totals.pendingCount && totals.settledCount ? ` Profit/loss covers only the ${totals.settledCount} bills with collection entered (${totals.pendingCount} pending).` : '');
+  document.querySelector('#uob-item-rows').innerHTML = data.items.map(item => `<tr>
+    <td data-label="Item">${escapeHtml(item.itemName)}</td>
+    <td data-label="Total qty">${Number(item.quantity).toLocaleString()}</td>
+    <td data-label="Billed value">${formatCurrency(item.amount)}</td>
+  </tr>`).join('') + (data.items.length ? `<tr><td><strong>Total</strong></td><td><strong>${Number(totals.totalQty).toLocaleString()}</strong></td><td><strong>${formatCurrency(totals.totalBilled)}</strong></td></tr>` : '');
+  document.querySelector('#uob-empty').hidden = data.bills.length > 0;
+  document.querySelector('#uob-bill-rows').innerHTML = data.bills.map(bill => {
+    const diffClass = bill.difference === null ? '' : bill.difference < 0 ? 'color:#d64545' : bill.difference > 0 ? 'color:#1f9d55' : '';
+    const diffText = bill.difference === null
+      ? 'Pending'
+      : `${bill.difference > 0 ? '+' : ''}${formatCurrency(bill.difference)} ${bill.difference > 0 ? 'Profit' : bill.difference < 0 ? 'Loss' : 'Even'}`;
+    const itemList = bill.items.length
+      ? `<details><summary>${bill.items.length} item${bill.items.length === 1 ? '' : 's'}</summary>${bill.items.map(item => `<div>${escapeHtml(item.itemName)} · ${Number(item.quantity).toLocaleString()} · ${formatCurrency(item.amount)}</div>`).join('')}</details>`
+      : 'No sales-register data';
+    return `<tr>
+      <td data-label="Date">${escapeHtml(formatDate(bill.billDate))}</td>
+      <td data-label="Bill no">${escapeHtml(bill.billNo)}</td>
+      <td data-label="Outlet">${escapeHtml(bill.outletName)}</td>
+      <td data-label="Items">${itemList}</td>
+      <td data-label="Bill value">${formatCurrency(bill.totalValue)}</td>
+      <td data-label="Amount collected"><input type="number" min="0" step="0.01" inputmode="decimal" class="uob-collected" style="width:7.5rem" aria-label="Amount collected for bill ${escapeHtml(bill.billNo)}" value="${bill.collected === null ? '' : bill.collected}" data-bill-value="${bill.totalValue}" data-uob-bill="${escapeHtml(bill.billNo)}"> <button class="button button-secondary" type="button" data-uob-save="${escapeHtml(bill.billNo)}">Save</button></td>
+      <td data-label="Difference" class="uob-diff" style="${diffClass}">${escapeHtml(diffText)}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function loadUob() {
+  try {
+    renderUob(await requestJson(`/api/uob?${uobQuery()}`, { cache: 'no-store' }));
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
 function showDashboardPage(page) {
   const isAdmin = currentUser?.role === 'admin';
   const isAtStock = page === 'at-stock' && ['admin', 'manager'].includes(currentUser?.role);
@@ -2157,9 +2219,11 @@ function showDashboardPage(page) {
   const isAtDamages = page === 'at-damages' && ['admin', 'manager'].includes(currentUser?.role);
   const isK4 = page === 'k4' && isAdmin;
   const isOrders = ['horeca', 'iss'].includes(page) && ['admin', 'manager', 'horeca_iss_ds'].includes(currentUser?.role);
+  const isUob = page === 'uob' && ['admin', 'manager'].includes(currentUser?.role);
   const isAtArea = isAtStock || isAtAssignment || isAtDamages;
   const isProfitabilityArea = isProfitability || isAtArea || isK4;
-  document.querySelector('#overview').hidden = isProfitabilityArea || isOrders;
+  document.querySelector('#overview').hidden = isProfitabilityArea || isOrders || isUob;
+  document.querySelector('#uob').hidden = !isUob;
   document.querySelector('#orders').hidden = !isOrders;
   document.querySelector('#profitability').hidden = !isProfitabilityArea;
   document.querySelector('#profitability-at-stock-report').hidden = !isAtStock;
@@ -2180,10 +2244,10 @@ function showDashboardPage(page) {
   document.querySelector('#profitability-sku-report > .page-footer').hidden = isManagerUpload;
   document.querySelector('#import-profit-costs').closest('.profitability-import-card').hidden = isManagerUpload;
   document.querySelector('#profitability-rfa-report').hidden = isAtArea || isK4 || isManagerUpload || document.querySelector('#profitability-rfa-tab-button').getAttribute('aria-selected') !== 'true';
-  document.querySelector('.day-picker').hidden = isProfitabilityArea || isOrders;
-  exportButton.hidden = isProfitabilityArea || isOrders || currentUser?.role === 'delivery_partner';
+  document.querySelector('.day-picker').hidden = isProfitabilityArea || isOrders || isUob;
+  exportButton.hidden = isProfitabilityArea || isOrders || isUob || currentUser?.role === 'delivery_partner';
   document.querySelector('.breadcrumbs strong').textContent =
-    isOrders ? 'HORECA & ISS' : isAtArea ? 'AT & BC' : isK4 ? 'K4' : isProfitability ? 'Profitability' : 'Deliveries';
+    isUob ? 'UOB' : isOrders ? 'HORECA & ISS' : isAtArea ? 'AT & BC' : isK4 ? 'K4' : isProfitability ? 'Profitability' : 'Deliveries';
   const profitabilityHeading = document.querySelector('#profitability .page-heading h1');
   profitabilityHeading.innerHTML = isK4 ? 'K4 delivery <span>receivable.</span>' : isManagerUpload ? 'Sales register <span>upload.</span>' : isAtDamages ? 'AT Damages <span>register.</span>' : isAtAssignment ? 'AT Assignment <span>by agent.</span>' : isAtStock ? 'AT Stock <span>management.</span>' : 'Profitability <span>reports.</span>';
   document.querySelector('#profitability .page-heading .eyebrow').innerHTML = isK4
@@ -2214,8 +2278,10 @@ function showDashboardPage(page) {
           ? isOrders && link.id === `${page}-link`
         : link.id === 'k4-link'
           ? isK4
+        : link.id === 'uob-link'
+          ? isUob
         : link.id === 'deliveries-link'
-          ? !isProfitabilityArea && !isOrders
+          ? !isProfitabilityArea && !isOrders && !isUob
           : false;
     link.classList.toggle('active', isActive);
     if (isActive) link.setAttribute('aria-current', 'page');
@@ -3043,7 +3109,9 @@ document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
       : link.id === 'k4-link' ? 'k4'
       : link.id === 'horeca-link' ? 'horeca'
       : link.id === 'iss-link' ? 'iss'
+      : link.id === 'uob-link' ? 'uob'
       : link.id === 'profitability-link' ? 'profitability' : 'deliveries';
+    if (page === 'uob' && !['admin', 'manager'].includes(currentUser?.role)) return;
     if (['horeca', 'iss'].includes(page) && !['admin', 'manager', 'horeca_iss_ds'].includes(currentUser?.role)) return;
     if (page === 'profitability' && !['admin', 'manager'].includes(currentUser?.role)) return;
     if (page === 'k4' && currentUser?.role !== 'admin') return;
@@ -3056,10 +3124,49 @@ document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
     if (page === 'profitability') { loadBillTracker(); loadUploadLock(); }
     if (page === 'k4') openK4Page();
     if (page === 'horeca') openOrdersPage();
+    if (page === 'uob') loadUob();
     if (page === 'at-stock') loadAtStockReport();
     if (page === 'at-assignment') loadAtAssignmentReport();
     if (page === 'at-damages') loadAtDamages();
   });
+});
+document.querySelector('#uob-refresh').addEventListener('click', loadUob);
+document.querySelector('#uob-from').addEventListener('change', loadUob);
+document.querySelector('#uob-to').addEventListener('change', loadUob);
+document.querySelector('#uob-export').addEventListener('click', event => {
+  const query = uobQuery();
+  downloadExcelReport(`/api/uob/export${query ? `?${query}` : ''}`, 'UOB-Bills.xlsx', event.currentTarget);
+});
+document.querySelector('#uob-bill-rows').addEventListener('input', event => {
+  const input = event.target.closest('.uob-collected');
+  if (!input) return;
+  const cell = input.closest('tr').querySelector('.uob-diff');
+  if (input.value === '') {
+    cell.textContent = 'Pending';
+    cell.style.color = '';
+    return;
+  }
+  const difference = Math.round((Number(input.value) - Number(input.dataset.billValue)) * 100) / 100;
+  cell.textContent = `${difference > 0 ? '+' : ''}${formatCurrency(difference)} ${difference > 0 ? 'Profit' : difference < 0 ? 'Loss' : 'Even'}`;
+  cell.style.color = difference > 0 ? '#1f9d55' : difference < 0 ? '#d64545' : '';
+});
+document.querySelector('#uob-bill-rows').addEventListener('click', async event => {
+  const button = event.target.closest('[data-uob-save]');
+  if (!button) return;
+  const input = button.closest('tr').querySelector('.uob-collected');
+  button.disabled = true;
+  try {
+    await requestJson(`/api/uob/bills/${encodeURIComponent(button.dataset.uobSave)}/collection`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount: input.value === '' ? null : Number(input.value) })
+    });
+    showToast('Amount collected saved.');
+    await loadUob();
+  } catch (error) {
+    showToast(error.message, true);
+    button.disabled = false;
+  }
 });
 for (const source of ['profitability', 'deliveries']) {
   const id = billTrackerIds(source);
