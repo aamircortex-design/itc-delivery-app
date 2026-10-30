@@ -4604,11 +4604,11 @@ app.post('/api/bills/bulk-delivered', async (req, res) => {
   if (
     !Array.isArray(billIds) ||
     billIds.length < 1 ||
-    billIds.length > 500 ||
+    billIds.length > 5000 ||
     billIds.some(id => !Number.isSafeInteger(Number(id)) || Number(id) < 1) ||
     new Set(billIds.map(Number)).size !== billIds.length
   ) {
-    return res.status(400).json({ error: 'Choose one or more valid bills.' });
+    return res.status(400).json({ error: 'Choose between 1 and 5000 valid bills.' });
   }
 
   const ids = billIds.map(Number);
