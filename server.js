@@ -4596,6 +4596,82 @@ app.post('/api/bills/not-supplied', async (req, res) => {
   }
 });
 
+app.post('/api/bills/bulk-delivered', async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only an administrator can mark multiple bills fully delivered.' });
+  }
+  const billIds = req.body?.billIds;
+  if (
+    !Array.isArray(billIds) ||
+    billIds.length < 1 ||
+    billIds.length > 500 ||
+    billIds.some(id => !Number.isSafeInteger(Number(id)) || Number(id) < 1) ||
+    new Set(billIds.map(Number)).size !== billIds.length
+  ) {
+    return res.status(400).json({ error: 'Choose one or more valid bills.' });
+  }
+
+  const ids = billIds.map(Number);
+  const placeholders = ids.map(() => '?').join(', ');
+  const db = req.app.locals.db;
+  let transactionOpen = false;
+  try {
+    await db.exec('BEGIN IMMEDIATE');
+    transactionOpen = true;
+    const bills = await db.all(
+      `SELECT id, status FROM bills WHERE company_id = ? AND id IN (${placeholders})`,
+      [req.user.companyId, ...ids]
+    );
+    if (bills.length !== ids.length) {
+      await db.exec('ROLLBACK');
+      transactionOpen = false;
+      return res.status(404).json({ error: 'One or more selected bills were not found in your workspace.' });
+    }
+
+    const returnedRows = await db.all(
+      `SELECT DISTINCT bill_id FROM bill_items WHERE qty_returned > 0 AND bill_id IN (${placeholders})`,
+      ids
+    );
+    const withReturns = new Set(returnedRows.map(row => row.bill_id));
+    const cancelled = bills.filter(bill => bill.status === 'Cancelled').map(bill => bill.id);
+    const updatable = bills
+      .filter(bill => bill.status !== 'Cancelled' && !withReturns.has(bill.id))
+      .map(bill => bill.id);
+
+    if (updatable.length) {
+      const updatePlaceholders = updatable.map(() => '?').join(', ');
+      const now = new Date().toISOString();
+      await db.run(
+        `UPDATE bill_items SET qty_delivered = qty_ordered, qty_returned = 0, return_type = ''
+         WHERE bill_id IN (${updatePlaceholders})`,
+        updatable
+      );
+      await db.run(
+        `UPDATE bills SET status = 'Completed', not_supplied_from_date = NULL,
+           updated_at = CURRENT_TIMESTAMP,
+           progress_started_at = COALESCE(progress_started_at, ?),
+           progress_updated_at = ?,
+           completed_at = COALESCE(completed_at, ?)
+         WHERE company_id = ? AND id IN (${updatePlaceholders})`,
+        [now, now, now, req.user.companyId, ...updatable]
+      );
+    }
+    await db.exec('COMMIT');
+    transactionOpen = false;
+
+    const skipped = ids.length - updatable.length;
+    let message = `${updatable.length} ${updatable.length === 1 ? 'bill' : 'bills'} marked fully delivered.`;
+    if (skipped) {
+      message += ` ${skipped} skipped (${cancelled.length} cancelled, ${skipped - cancelled.length} with returned items).`;
+    }
+    res.json({ message, updatedCount: updatable.length, skippedCount: skipped });
+  } catch (error) {
+    if (transactionOpen) await db.exec('ROLLBACK');
+    console.error('Could not bulk mark deliveries delivered:', error);
+    res.status(500).json({ error: 'Could not update the selected bills. Please try again.' });
+  }
+});
+
 app.post('/api/bills/reconcile', async (req, res) => {
   const { billId, items } = req.body;
   const db = req.app.locals.db;

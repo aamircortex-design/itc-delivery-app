@@ -394,6 +394,7 @@ async function loadCurrentUser() {
   document.querySelector('#assigned-header').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#delivery-agent-filter-control').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#bulk-assignment').hidden = !['admin', 'manager'].includes(user.role);
+  document.querySelector('#deliver-selected-bills').hidden = user.role !== 'admin';
   document.querySelector('#bulk-select-header').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#delivery-heading').textContent = user.role === 'delivery_partner' ? 'My assigned deliveries' : 'All deliveries';
   document.querySelector('#total-copy').textContent = user.role === 'delivery_partner'
@@ -2351,6 +2352,33 @@ function updateBulkAssignmentControls(visibleBills = visibleDeliveries()) {
   selectVisible.indeterminate = selectedVisibleCount > 0 && selectedVisibleCount < visibleIds.length;
   document.querySelector('#assign-selected-bills').disabled =
     selectedBillIds.size === 0 || !document.querySelector('#bulk-partner-select').value;
+  document.querySelector('#deliver-selected-bills').disabled = selectedBillIds.size === 0;
+}
+
+async function markSelectedBillsDelivered() {
+  const billIds = [...selectedBillIds];
+  if (!billIds.length) return;
+  if (!confirm(`Mark ${billIds.length} ${billIds.length === 1 ? 'bill' : 'bills'} as fully delivered? Cancelled bills and bills with returned items are skipped.`)) return;
+
+  const button = document.querySelector('#deliver-selected-bills');
+  button.disabled = true;
+  button.textContent = 'Updating...';
+  try {
+    const result = await requestJson('/api/bills/bulk-delivered', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ billIds })
+    });
+    selectedBillIds.clear();
+    document.querySelector('#select-visible-bills').checked = false;
+    await loadDeliveries();
+    showToast(result.message);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    button.textContent = 'Mark fully delivered';
+    updateBulkAssignmentControls();
+  }
 }
 
 async function assignSelectedBills() {
@@ -3050,6 +3078,7 @@ document.querySelector('#bulk-salesman-select').addEventListener('change', event
 });
 document.querySelector('#select-salesman-outlets').addEventListener('click', selectSalesmanOutlets);
 document.querySelector('#assign-selected-bills').addEventListener('click', assignSelectedBills);
+document.querySelector('#deliver-selected-bills').addEventListener('click', markSelectedBillsDelivered);
 document.querySelector('#cancel-reconcile').addEventListener('click', () => reconcileDialog.close());
 document.querySelector('#fill-bill-delivered').addEventListener('click', fillBillAsFullyDelivered);
 document.querySelector('#mark-not-supplied').addEventListener('click', markBillNotSupplied);
