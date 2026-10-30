@@ -90,7 +90,7 @@ function getAtPackWeightKg(itemName) {
 function getAtDisplayName(itemName, packWeightKg) {
   const name = String(itemName).toUpperCase();
   const variants = [
-    [/MULTIGRAIN/, 'MULTIGRAINS'], [/SELECT/, 'SELECT'], [/RAGI/, 'RAGI'],
+    [/MULTIGRAIN/, 'MULTIGRAINS'], [/SELECT/, 'SELECT'], [/RAGI/, 'RAGI'], [/PROTEIN/, 'HIGH PROTEIN'],
     [/MILLETS/, 'MILLETS'], [/SUPERIOR/, 'SUPERIOR MP'], [/MPATTA/, 'MP'],
     [/\bSRC\b|SUGAR RELEASE|SUGRA RELEASE/, 'SRC']
   ];
@@ -2922,23 +2922,46 @@ const AT_EXTRA_PRODUCTS = [
   { category: 'AT', itemCode: '', itemName: 'ATTA SELECT 5KG' },
   { category: 'AT', itemCode: '', itemName: 'ATTA MULTIGRAINS 5KG' },
   { category: 'BC', itemCode: '', itemName: 'GRAM FLOUR 200G' },
-  { category: 'AT', itemCode: '', itemName: 'ATTA SRC 1KG' }
+  { category: 'AT', itemCode: '', itemName: 'ATTA SRC 1KG' },
+  { category: 'AT', itemCode: '', itemName: 'ATTA HIGH PROTEIN 1KG' }
 ];
+
+// Products whose variants and codes are folded into one stock row.
+const MERGED_STOCK_PRODUCTS = new Set([
+  'ATTA 2KG', 'GRAM FLOUR 200G', 'ATTA HIGH PROTEIN 1KG', 'ATTA RAGI 500G', 'SOOJI RAVA 200G'
+]);
+
+const hasPackSize = (name, grams, weight) =>
+  weight === grams / 1000 || new RegExp(`(?:^|[^0-9])${grams}\\s*(?:G|GM|GMS|GRAMS?)(?![A-Z])`, 'i').test(name);
 
 function canonicalAtProduct(product) {
   const name = String(product.itemName || '').toUpperCase();
-  if (/GRAM FLOUR|BESAN/.test(name) && (getAtPackWeightKg(product.itemName) === 0.2 || product.itemName === 'GRAM FLOUR 200G')) {
+  const weight = getAtPackWeightKg(product.itemName);
+  if (/GRAM FLOUR|BESAN/.test(name) && (weight === 0.2 || product.itemName === 'GRAM FLOUR 200G')) {
     return { ...product, category: 'BC', itemCode: '', itemName: 'GRAM FLOUR 200G' };
   }
+  if (/SOOJI|SUJI|\bRAVA\b|\bRAWA\b|SEMOLINA/.test(name) && hasPackSize(name, 200, weight)) {
+    return { ...product, category: 'BC', itemCode: '', itemName: 'SOOJI RAVA 200G' };
+  }
+  if (/RAGI/.test(name) && hasPackSize(name, 500, weight)) {
+    return { ...product, category: 'BC', itemCode: '', itemName: 'ATTA RAGI 500G' };
+  }
   if (product.category !== 'AT') return product;
-  const weight = getAtPackWeightKg(product.itemName);
   const merged = itemName => ({ ...product, itemCode: '', itemName });
   if (weight === 2) return merged('ATTA 2KG');
   if (weight === 5 && /SELECT/.test(name)) return merged('ATTA SELECT 5KG');
   if (weight === 5 && /MULTIGRAIN/.test(name)) return merged('ATTA MULTIGRAINS 5KG');
+  if (weight === 1 && /HIGH\s*PROTEIN|HI[\s-]?PRO|PROTEIN/.test(name)) return merged('ATTA HIGH PROTEIN 1KG');
   if (/\bSRC\b|SUGAR RELEASE|SUGRA RELEASE/.test(name)) return merged('ATTA SRC 1KG');
   return product;
 }
+
+// Old AT rows that are now counted in pieces were stored in kg.
+const legacyKgPackWeight = row => {
+  if (row.category !== 'AT') return null;
+  const canonical = canonicalAtProduct(row);
+  return canonical.category === 'BC' ? getAtPackWeightKg(canonical.itemName) : null;
+};
 
 const atProductKey = row => {
   const product = canonicalAtProduct(row);
@@ -2997,19 +3020,19 @@ async function getLockedAtProducts(db, companyId, date) {
 
 // Old per-variant rows for a merged 2 kg product are folded into the canonical row.
 async function clearAtVariantRows(db, companyId, date, product, clearOpening = true) {
-  if (product.itemName !== 'ATTA 2KG' && product.itemName !== 'GRAM FLOUR 200G') return;
+  if (!MERGED_STOCK_PRODUCTS.has(product.itemName)) return;
   const rows = await db.all(
-    `SELECT item_code AS itemCode, item_name AS itemName FROM at_stock_daily
-     WHERE company_id = ? AND stock_date = ? AND UPPER(TRIM(sales_category)) = 'AT'`,
+    `SELECT sales_category AS rawCategory, UPPER(TRIM(sales_category)) AS category, item_code AS itemCode, item_name AS itemName
+     FROM at_stock_daily WHERE company_id = ? AND stock_date = ?`,
     [companyId, date]
   );
   for (const row of rows) {
-    if (product.category === 'AT' && row.itemName === product.itemName && row.itemCode === product.itemCode) continue;
-    if (atProductKey({ category: 'AT', ...row }) !== atProductKey(product)) continue;
+    if (row.category === product.category && row.itemName === product.itemName && row.itemCode === product.itemCode) continue;
+    if (atProductKey(row) !== atProductKey(product)) continue;
     await db.run(
       `UPDATE at_stock_daily SET ${clearOpening ? 'opening_qty = NULL, ' : ''}purchase_qty = 0, damaged_qty = 0, tallied = 0
        WHERE company_id = ? AND stock_date = ? AND sales_category = ? AND item_code = ? AND item_name = ?`,
-      [companyId, date, 'AT', row.itemCode, row.itemName]
+      [companyId, date, row.rawCategory, row.itemCode, row.itemName]
     );
   }
 }
@@ -3072,13 +3095,14 @@ app.get('/api/profitability/at-stock', async (req, res) => {
     }
     const stockByProduct = new Map();
     for (const rawRow of stockRows) {
-      // Gram flour used to be stored as AT in kg; it is now a BC product counted in pieces.
-      const row = rawRow.category === 'AT' && canonicalAtProduct(rawRow).category === 'BC'
+      // Products now counted in pieces (gram flour, ragi) used to be stored as AT in kg.
+      const legacyWeight = legacyKgPackWeight(rawRow);
+      const row = legacyWeight
         ? {
             ...rawRow,
-            openingQty: rawRow.openingQty === null ? null : rawRow.openingQty / 0.2,
-            purchaseQty: rawRow.purchaseQty / 0.2,
-            damagedQty: rawRow.damagedQty / 0.2,
+            openingQty: rawRow.openingQty === null ? null : rawRow.openingQty / legacyWeight,
+            purchaseQty: rawRow.purchaseQty / legacyWeight,
+            damagedQty: rawRow.damagedQty / legacyWeight,
             openingBags: null,
             openingPcs: null
           }
@@ -3199,8 +3223,8 @@ async function loadDamageWarehouse(db, companyId, toDate) {
     return products.get(key);
   };
   for (const row of damaged) {
-    const rawGramFlourInKg = row.category === 'AT' && canonicalAtProduct(row).category === 'BC';
-    entryFor(row).damagedQty += Number(row.qty) / (rawGramFlourInKg ? 0.2 : 1);
+    const legacyWeight = legacyKgPackWeight(row);
+    entryFor(row).damagedQty += Number(row.qty) / (legacyWeight || 1);
   }
   for (const row of removals) {
     const entry = entryFor(row);
