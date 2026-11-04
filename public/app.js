@@ -2178,7 +2178,8 @@ function renderUob(data) {
     pending: 'Add the amount collected to see profit or loss.'
   }[totals.outcome];
   document.querySelector('#uob-payment-rows').innerHTML = data.payments.map(payment => `<tr>
-    <td data-label="Date">${escapeHtml(formatDate(payment.collectedDate))}</td>
+    <td data-label="Collected on">${escapeHtml(formatDate(payment.collectedDate))}</td>
+    <td data-label="Against bill date">${escapeHtml(formatDate(payment.billDate))}</td>
     <td data-label="Amount">${formatCurrency(payment.amount)}</td>
     <td data-label="Note">${escapeHtml(payment.note)}</td>
     <td data-label="Entered by">${escapeHtml(payment.createdBy)}</td>
@@ -2207,6 +2208,8 @@ function renderUob(data) {
 async function loadUob() {
   const payDate = document.querySelector('#uob-pay-date');
   if (!payDate.value) payDate.value = getLocalDateValue();
+  const payBillDate = document.querySelector('#uob-pay-bill-date');
+  if (!payBillDate.value) payBillDate.value = document.querySelector('#uob-to').value || getLocalDateValue();
   // Default to today's figures; a From/To range gives the cumulative total for those days.
   const fromInput = document.querySelector('#uob-from');
   const toInput = document.querySelector('#uob-to');
@@ -3186,6 +3189,7 @@ document.querySelector('#uob-payment-form').addEventListener('submit', async eve
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         date: document.querySelector('#uob-pay-date').value,
+        billDate: document.querySelector('#uob-pay-bill-date').value,
         amount: Number(document.querySelector('#uob-pay-amount').value),
         note: document.querySelector('#uob-pay-note').value
       })

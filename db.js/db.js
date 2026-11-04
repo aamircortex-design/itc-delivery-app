@@ -472,6 +472,11 @@ async function initDb() {
     await db.exec('ALTER TABLE at_stock_daily ADD COLUMN opening_bags_input REAL');
     await db.exec('ALTER TABLE at_stock_daily ADD COLUMN opening_pcs_input REAL');
   }
+  const uobPaymentColumns = await db.all('PRAGMA table_info(uob_payments)');
+  if (!uobPaymentColumns.some(column => column.name === 'bill_date')) {
+    await db.exec("ALTER TABLE uob_payments ADD COLUMN bill_date TEXT NOT NULL DEFAULT ''");
+    await db.exec('UPDATE uob_payments SET bill_date = collected_date');
+  }
   const billItemColumns = await db.all('PRAGMA table_info(bill_items)');
   if (!billItemColumns.some(column => column.name === 'return_type')) {
     await db.exec("ALTER TABLE bill_items ADD COLUMN return_type TEXT NOT NULL DEFAULT ''");

@@ -720,10 +720,10 @@ async function getUobData(db, companyId, fromDate = '', toDate = '') {
     }
   }
   const payments = await db.all(
-    `SELECT id, collected_date AS collectedDate, amount, note, created_by AS createdBy
+    `SELECT id, collected_date AS collectedDate, bill_date AS billDate, amount, note, created_by AS createdBy
      FROM uob_payments
-     WHERE company_id = ? AND (? = '' OR collected_date >= ?) AND (? = '' OR collected_date <= ?)
-     ORDER BY collected_date, id`,
+     WHERE company_id = ? AND (? = '' OR bill_date >= ?) AND (? = '' OR bill_date <= ?)
+     ORDER BY bill_date, collected_date, id`,
     [companyId, fromDate, fromDate, toDate, toDate]
   );
   const totalBilled = roundMoney(result.reduce((sum, bill) => sum + bill.totalValue, 0));
@@ -767,17 +767,18 @@ app.get('/api/uob', requireUobAccess, async (req, res) => {
 app.post('/api/uob/payments', requireUobAccess, async (req, res) => {
   const amount = Number(req.body?.amount);
   const collectedDate = String(req.body?.date || '');
+  const billDate = String(req.body?.billDate || collectedDate);
   const note = String(req.body?.note || '').trim().slice(0, 200);
   if (!Number.isFinite(amount) || amount <= 0 || amount > 1e9) {
     return res.status(400).json({ error: 'Enter the amount collected (greater than 0).' });
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(collectedDate)) {
-    return res.status(400).json({ error: 'Choose the date the amount was collected.' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(collectedDate) || !/^\d{4}-\d{2}-\d{2}$/.test(billDate)) {
+    return res.status(400).json({ error: 'Choose the date collected and the bill date it is against.' });
   }
   try {
     await req.app.locals.db.run(
-      'INSERT INTO uob_payments (company_id, collected_date, amount, note, created_by) VALUES (?, ?, ?, ?, ?)',
-      [req.user.companyId, collectedDate, roundMoney(amount), note, req.user.fullName || '']
+      'INSERT INTO uob_payments (company_id, collected_date, bill_date, amount, note, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+      [req.user.companyId, collectedDate, billDate, roundMoney(amount), note, req.user.fullName || '']
     );
     res.status(201).json({ ok: true });
   } catch (error) {
