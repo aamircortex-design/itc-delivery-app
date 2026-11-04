@@ -2207,6 +2207,13 @@ function renderUob(data) {
 async function loadUob() {
   const payDate = document.querySelector('#uob-pay-date');
   if (!payDate.value) payDate.value = getLocalDateValue();
+  // Default to today's figures; a From/To range gives the cumulative total for those days.
+  const fromInput = document.querySelector('#uob-from');
+  const toInput = document.querySelector('#uob-to');
+  if (!fromInput.value && !toInput.value) {
+    fromInput.value = getLocalDateValue();
+    toInput.value = getLocalDateValue();
+  }
   try {
     renderUob(await requestJson(`/api/uob?${uobQuery()}`, { cache: 'no-store' }));
   } catch (error) {
