@@ -2953,8 +2953,8 @@ function canonicalAtProduct(product) {
   if (weight === 5 && /SELECT/.test(name)) return merged('ATTA SELECT 5KG');
   if (weight === 5 && /MULTIGRAIN/.test(name)) return merged('ATTA MULTIGRAINS 5KG');
   if (weight === 1 && (
-    String(product.itemCode || '').trim().toUpperCase() === 'FATSG001' ||
-    /^ASVD\s+ATTA\s+WITH\s+SPECIAL\s+GRAINS\s+1\s*KG(?:\s*_FATSG001)?$/.test(name.trim())
+    ['FATSG001', 'FATSG001SW'].includes(String(product.itemCode || '').trim().toUpperCase()) ||
+    /^ASVD\s+ATTA\s+WITH\s+SPECIAL\s+GRAINS\s+1\s*KG(?:\s*_FATSG001(?:SW)?)?$/.test(name.trim())
   )) return merged('ATTA HIGH PROTEIN 1KG');
   if (weight === 1 && /HIGH\s*PROTEIN|HI[\s-]?PRO|PROTEIN/.test(name)) return merged('ATTA HIGH PROTEIN 1KG');
   if (/\bSRC\b|SUGAR RELEASE|SUGRA RELEASE/.test(name)) return merged('ATTA SRC 1KG');

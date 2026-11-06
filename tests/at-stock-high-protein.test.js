@@ -31,7 +31,7 @@ test('special grains 1 kg sales and existing stock are included in high protein'
      VALUES (1, ?, ?, ?, ?, ?, ?, '06 ATTA', 0)`,
     [date, bill, code, itemName, quantity, returned]
   );
-  await addSale('2026-11-05', '1', 'FATSG001', name, 60, 2);
+  await addSale('2026-11-05', '1', 'FATSG001SW', `${name}_FATSG001SW`, 60, 2);
   await addSale('2026-11-05', '2', '', `${name}_FATSG001`, 3);
   await addSale('2026-11-05', '3', 'OTHER', 'AASHIRVAAD SUPERIOR MP AT 1KG', 5);
   await addSale('2026-11-05', '4', 'SELECT', 'AASHIRVAAD ATTA 1KG SELECT', 4);
@@ -54,7 +54,7 @@ test('special grains 1 kg sales and existing stock are included in high protein'
   assert.equal(protein.purchaseQty, 30);
   assert.equal(protein.damagedQty, 1);
   assert.equal(protein.closingQty, 58);
-  assert.equal(report.rows.filter(row => row.itemCode === 'FATSG001').length, 0);
+  assert.equal(report.rows.filter(row => ['FATSG001', 'FATSG001SW'].includes(row.itemCode)).length, 0);
   assert.equal(report.rows.find(row => row.itemCode === 'OTHER').salesQty, 5);
   assert.equal(report.rows.find(row => row.itemCode === 'SELECT').salesQty, 4);
 
@@ -88,7 +88,7 @@ test('special grains 1 kg sales and existing stock are included in high protein'
   const nextDay = await get('/api/profitability/at-stock?date=2026-11-06');
   assert.equal(nextDay.rows.find(row => row.itemName === 'ATTA HIGH PROTEIN 1KG').openingQty, 58);
   const assignments = await get('/api/profitability/at-assignment?date=2026-11-05');
-  assert.equal(assignments.agents[0].items.find(row => row.itemCode === 'FATSG001').displayName, 'ATTA HIGH PROTEIN 1KG');
+  assert.equal(assignments.agents[0].items.find(row => row.itemCode === 'FATSG001SW').displayName, 'ATTA HIGH PROTEIN 1KG');
   const damages = await get('/api/profitability/damages?fromDate=2026-11-05&toDate=2026-11-05');
   assert.equal(damages.entries[0].displayName, 'ATTA HIGH PROTEIN 1KG');
   assert.equal(damages.warehouse[0].displayName, 'ATTA HIGH PROTEIN 1KG');
