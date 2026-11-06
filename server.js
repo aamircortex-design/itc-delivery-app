@@ -2952,6 +2952,10 @@ function canonicalAtProduct(product) {
   if (weight === 2) return merged('ATTA 2KG');
   if (weight === 5 && /SELECT/.test(name)) return merged('ATTA SELECT 5KG');
   if (weight === 5 && /MULTIGRAIN/.test(name)) return merged('ATTA MULTIGRAINS 5KG');
+  if (weight === 1 && (
+    String(product.itemCode || '').trim().toUpperCase() === 'FATSG001' ||
+    /^ASVD\s+ATTA\s+WITH\s+SPECIAL\s+GRAINS\s+1\s*KG(?:\s*_FATSG001)?$/.test(name.trim())
+  )) return merged('ATTA HIGH PROTEIN 1KG');
   if (weight === 1 && /HIGH\s*PROTEIN|HI[\s-]?PRO|PROTEIN/.test(name)) return merged('ATTA HIGH PROTEIN 1KG');
   if (/\bSRC\b|SUGAR RELEASE|SUGRA RELEASE/.test(name)) return merged('ATTA SRC 1KG');
   return product;
@@ -3019,8 +3023,8 @@ async function getLockedAtProducts(db, companyId, date) {
   return locked;
 }
 
-// Old per-variant rows for a merged 2 kg product are folded into the canonical row.
-async function clearAtVariantRows(db, companyId, date, product, clearOpening = true) {
+// Old per-variant rows are folded into the canonical row.
+async function clearAtVariantRows(db, companyId, date, product, clearOpening = true, clearQuantities = true) {
   if (!MERGED_STOCK_PRODUCTS.has(product.itemName)) return;
   const rows = await db.all(
     `SELECT sales_category AS rawCategory, UPPER(TRIM(sales_category)) AS category, item_code AS itemCode, item_name AS itemName
@@ -3031,7 +3035,7 @@ async function clearAtVariantRows(db, companyId, date, product, clearOpening = t
     if (row.category === product.category && row.itemName === product.itemName && row.itemCode === product.itemCode) continue;
     if (atProductKey(row) !== atProductKey(product)) continue;
     await db.run(
-      `UPDATE at_stock_daily SET ${clearOpening ? 'opening_qty = NULL, ' : ''}purchase_qty = 0, damaged_qty = 0, tallied = 0
+      `UPDATE at_stock_daily SET ${clearOpening ? 'opening_qty = NULL, ' : ''}${clearQuantities ? 'purchase_qty = 0, damaged_qty = 0, ' : ''}tallied = 0
        WHERE company_id = ? AND stock_date = ? AND sales_category = ? AND item_code = ? AND item_name = ?`,
       [companyId, date, row.rawCategory, row.itemCode, row.itemName]
     );
@@ -3418,7 +3422,7 @@ app.patch('/api/profitability/at-stock/:date/tallied', async (req, res) => {
        DO UPDATE SET tallied = excluded.tallied`,
       [req.user.companyId, selectedDate, product.category, product.itemCode, product.itemName, req.body.tallied ? 1 : 0]
     );
-    await clearAtVariantRows(db, req.user.companyId, selectedDate, product, false);
+    await clearAtVariantRows(db, req.user.companyId, selectedDate, product, false, false);
     res.json({ tallied: req.body.tallied });
   } catch (error) {
     console.error('AT tallied update failed:', error);
@@ -3478,11 +3482,12 @@ app.get('/api/profitability/at-assignment', async (req, res) => {
       const key = row.agentId ?? 'none';
       if (!agents.has(key)) agents.set(key, { agentId: row.agentId, agentName: row.agentName, items: [] });
       const packWeightKg = row.category === 'AT' ? getAtPackWeightKg(row.itemName) : null;
+      const displayProduct = canonicalAtProduct(row);
       agents.get(key).items.push({
         category: row.category,
         itemCode: row.itemCode,
         itemName: row.itemName,
-        displayName: row.category === 'AT' ? getAtDisplayName(row.itemName, packWeightKg) : row.itemName,
+        displayName: row.category === 'AT' ? getAtDisplayName(displayProduct.itemName === 'ATTA HIGH PROTEIN 1KG' ? displayProduct.itemName : row.itemName, packWeightKg) : row.itemName,
         packWeightKg,
         quantity: Number(row.quantity),
         billCount: row.billCount,
@@ -3524,7 +3529,7 @@ app.get('/api/profitability/damages', async (req, res) => {
   }
   try {
     const rows = await req.app.locals.db.all(
-      `SELECT stock_date AS date, UPPER(TRIM(sales_category)) AS category, TRIM(item_name) AS itemName, damaged_qty AS damagedQty
+      `SELECT stock_date AS date, UPPER(TRIM(sales_category)) AS category, TRIM(item_code) AS itemCode, TRIM(item_name) AS itemName, damaged_qty AS damagedQty
        FROM at_stock_daily
        WHERE company_id = ? AND stock_date BETWEEN ? AND ? AND damaged_qty > 0
        ORDER BY stock_date DESC, category, item_name`,
@@ -3533,11 +3538,12 @@ app.get('/api/profitability/damages', async (req, res) => {
     const entries = rows.map(row => {
       const packWeightKg = row.category === 'AT' ? getAtPackWeightKg(row.itemName) : null;
       const item = { category: row.category, packWeightKg };
+      const displayProduct = canonicalAtProduct(row);
       return {
         date: row.date,
         category: row.category,
         itemName: row.itemName,
-        displayName: row.category === 'AT' ? getAtDisplayName(row.itemName, packWeightKg) : row.itemName,
+        displayName: row.category === 'AT' ? getAtDisplayName(displayProduct.itemName === 'ATTA HIGH PROTEIN 1KG' ? displayProduct.itemName : row.itemName, packWeightKg) : row.itemName,
         quantity: Number(row.damagedQty),
         display: formatAtQuantity(item, Number(row.damagedQty))
       };
