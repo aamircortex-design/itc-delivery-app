@@ -33,7 +33,7 @@ test('special grains 1 kg sales and existing stock are included in high protein'
   );
   await addSale('2026-11-05', '1', 'FATSG001SW', `${name}_FATSG001SW`, 60, 2);
   await addSale('2026-11-05', '2', '', `${name}_FATSG001`, 3);
-  await addSale('2026-11-05', '3', 'OTHER', 'AASHIRVAAD SUPERIOR MP AT 1KG', 5);
+  await addSale('2026-11-05', '3', 'OTHER', 'ATTA SUPERIOR MP1KG', 5);
   await addSale('2026-11-05', '4', 'SELECT', 'AASHIRVAAD ATTA 1KG SELECT', 4);
   await addSale('2026-11-05', '5', 'PLAIN', 'AASHIRVAAD ATTA 1KG', 7);
   await addSale('2026-11-05', '6', 'SPECIAL', 'AASHIRVAAD ATTA WITH SPECIAL GRAINS 1KG', 6);
@@ -42,7 +42,7 @@ test('special grains 1 kg sales and existing stock are included in high protein'
     VALUES (1, '2026-11-05', 'AT', 'FATSG001', ?, 90, 30, 1)`, [name]);
   await db.run(`INSERT INTO at_stock_daily
     (company_id, stock_date, sales_category, item_code, item_name, opening_qty, purchase_qty, damaged_qty)
-    VALUES (1, '2026-11-05', 'AT', 'OTHER', 'AASHIRVAAD SUPERIOR MP AT 1KG', 20, 3, 0)`);
+    VALUES (1, '2026-11-05', 'AT', 'OTHER', 'ATTA SUPERIOR MP1KG', 20, 3, 0)`);
 
   const base = `http://127.0.0.1:${server.address().port}`;
   const get = async path => {

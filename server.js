@@ -2947,8 +2947,9 @@ function canonicalAtProduct(product) {
   if (/RAGI/.test(name) && hasPackSize(name, 500, weight)) {
     return { ...product, category: 'BC', itemCode: '', itemName: 'ATTA RAGI 500G' };
   }
-  if (product.category !== 'AT') return product;
-  const merged = itemName => ({ ...product, itemCode: '', itemName });
+  const category = String(product.category || '').trim().toUpperCase();
+  if (category !== 'AT' && !category.includes('06 ATTA')) return product;
+  const merged = itemName => ({ ...product, category: 'AT', itemCode: '', itemName });
   if (weight === 2) return merged('ATTA 2KG');
   if (weight === 5 && /SELECT/.test(name)) return merged('ATTA SELECT 5KG');
   if (weight === 5 && /MULTIGRAIN/.test(name)) return merged('ATTA MULTIGRAINS 5KG');
