@@ -2929,7 +2929,7 @@ const AT_EXTRA_PRODUCTS = [
 
 // Products whose variants and codes are folded into one stock row.
 const MERGED_STOCK_PRODUCTS = new Set([
-  'ATTA 2KG', 'GRAM FLOUR 200G', 'ATTA HIGH PROTEIN 1KG', 'ATTA RAGI 500G', 'SOOJI RAVA 200G'
+  'ATTA 1KG', 'ATTA 2KG', 'GRAM FLOUR 200G', 'ATTA HIGH PROTEIN 1KG', 'ATTA RAGI 500G', 'SOOJI RAVA 200G'
 ]);
 
 const hasPackSize = (name, grams, weight) =>
@@ -2954,10 +2954,14 @@ function canonicalAtProduct(product) {
   if (weight === 5 && /MULTIGRAIN/.test(name)) return merged('ATTA MULTIGRAINS 5KG');
   if (weight === 1 && (
     ['FATSG001', 'FATSG001SW'].includes(String(product.itemCode || '').trim().toUpperCase()) ||
-    /^ASVD\s+ATTA\s+WITH\s+SPECIAL\s+GRAINS\s+1\s*KG(?:\s*_FATSG001(?:SW)?)?$/.test(name.trim())
+    /ATTA\s+WITH\s+SPECIAL\s+GRAINS/.test(name)
   )) return merged('ATTA HIGH PROTEIN 1KG');
   if (weight === 1 && /HIGH\s*PROTEIN|HI[\s-]?PRO|PROTEIN/.test(name)) return merged('ATTA HIGH PROTEIN 1KG');
   if (/\bSRC\b|SUGAR RELEASE|SUGRA RELEASE/.test(name)) return merged('ATTA SRC 1KG');
+  if (weight === 1 && /\bAT(?:TA)?\b/.test(name) &&
+      !/MULTIGRAIN|SELECT|RAGI|MILLETS|PROTEIN|SRC|SUGAR RELEASE|SUGRA RELEASE/.test(name)) {
+    return merged('ATTA 1KG');
+  }
   return product;
 }
 
