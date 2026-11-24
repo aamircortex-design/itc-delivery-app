@@ -2948,11 +2948,7 @@ function canonicalAtProduct(product) {
     return { ...product, category: 'BC', itemCode: '', itemName: 'ATTA RAGI 500G' };
   }
   const category = String(product.category || '').trim().toUpperCase();
-  if (category !== 'AT' && !category.includes('06 ATTA')) return product;
   const merged = itemName => ({ ...product, category: 'AT', itemCode: '', itemName });
-  if (weight === 2) return merged('ATTA 2KG');
-  if (weight === 5 && /SELECT/.test(name)) return merged('ATTA SELECT 5KG');
-  if (weight === 5 && /MULTIGRAIN/.test(name)) return merged('ATTA MULTIGRAINS 5KG');
   if (weight === 1 && (
     ['FATSG001', 'FATSG001SW'].includes(String(product.itemCode || '').trim().toUpperCase()) ||
     /ATTA\s+WITH\s+SPECIAL\s+GRAINS/.test(name)
@@ -2963,6 +2959,10 @@ function canonicalAtProduct(product) {
       !/MULTIGRAIN|SELECT|RAGI|MILLETS|PROTEIN|SRC|SUGAR RELEASE|SUGRA RELEASE/.test(name)) {
     return merged('ATTA 1KG');
   }
+  if (category !== 'AT' && !category.includes('06 ATTA')) return product;
+  if (weight === 2) return merged('ATTA 2KG');
+  if (weight === 5 && /SELECT/.test(name)) return merged('ATTA SELECT 5KG');
+  if (weight === 5 && /MULTIGRAIN/.test(name)) return merged('ATTA MULTIGRAINS 5KG');
   return product;
 }
 
