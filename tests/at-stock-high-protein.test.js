@@ -25,28 +25,24 @@ test('special grains 1 kg sales and existing stock are included in high protein'
     [crypto.createHash('sha256').update(token).digest('hex'), '2999-01-01T00:00:00.000Z']);
 
   const name = 'ASVD ATTA WITH SPECIAL GRAINS 1KG';
-  const addSale = (date, bill, code, itemName, quantity, returned = 0, salesCategory = '06 ATTA') => db.run(
+  const addSale = (date, bill, code, itemName, quantity, returned = 0) => db.run(
     `INSERT INTO profitability_sales
       (company_id, sales_date, bill_no, item_code, item_name, quantity, sales_return_qty, sales_category, gross_amount)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, 0)`,
-    [date, bill, code, itemName, quantity, returned, salesCategory]
+     VALUES (1, ?, ?, ?, ?, ?, ?, '06 ATTA', 0)`,
+    [date, bill, code, itemName, quantity, returned]
   );
   await addSale('2026-11-05', '1', 'FATSG001SW', `${name}_FATSG001SW`, 60, 2);
   await addSale('2026-11-05', '2', '', `${name}_FATSG001`, 3);
-  await addSale('2026-11-05', '3', 'OTHER', 'ATTA SUPERIOR MP1KG', 5);
+  await addSale('2026-11-05', '3', 'OTHER', 'AASHIRVAAD SUPERIOR MP1KG', 5);
   await addSale('2026-11-05', '4', 'SELECT', 'AASHIRVAAD ATTA 1KG SELECT', 4);
   await addSale('2026-11-05', '5', 'PLAIN', 'AASHIRVAAD ATTA 1KG', 7);
   await addSale('2026-11-05', '6', 'SPECIAL', 'AASHIRVAAD ATTA WITH SPECIAL GRAINS 1KG', 6);
-  await addSale('2026-11-05', '7', 'OTHER_BC', 'ATTA SUPERIOR MP1KG', 4, 0, '50 BREAKFAST CEREAL');
   await db.run(`INSERT INTO at_stock_daily
     (company_id, stock_date, sales_category, item_code, item_name, opening_qty, purchase_qty, damaged_qty)
     VALUES (1, '2026-11-05', 'AT', 'FATSG001', ?, 90, 30, 1)`, [name]);
   await db.run(`INSERT INTO at_stock_daily
     (company_id, stock_date, sales_category, item_code, item_name, opening_qty, purchase_qty, damaged_qty)
-    VALUES (1, '2026-11-05', 'AT', 'OTHER', 'ATTA SUPERIOR MP1KG', 20, 3, 0)`);
-  await db.run(`INSERT INTO at_stock_daily
-    (company_id, stock_date, sales_category, item_code, item_name, opening_qty, purchase_qty, damaged_qty)
-    VALUES (1, '2026-11-05', 'BC', 'OTHER_BC', 'ATTA SUPERIOR MP1KG', 1, 2, 0)`);
+    VALUES (1, '2026-11-05', 'AT', 'OTHER', 'AASHIRVAAD SUPERIOR MP1KG', 20, 3, 0)`);
 
   const base = `http://127.0.0.1:${server.address().port}`;
   const get = async path => {
@@ -66,10 +62,10 @@ test('special grains 1 kg sales and existing stock are included in high protein'
   assert.equal(report.rows.filter(row => ['FATSG001', 'FATSG001SW'].includes(row.itemCode)).length, 0);
   const standardAtta = report.rows.find(row => row.itemName === 'ATTA 1KG');
   assert.equal(standardAtta.displayName, 'ATTA 1KG');
-  assert.equal(standardAtta.salesQty, 16);
-  assert.equal(standardAtta.openingQty, 21);
-  assert.equal(standardAtta.purchaseQty, 5);
-  assert.equal(standardAtta.closingQty, 10);
+  assert.equal(standardAtta.salesQty, 12);
+  assert.equal(standardAtta.openingQty, 20);
+  assert.equal(standardAtta.purchaseQty, 3);
+  assert.equal(standardAtta.closingQty, 11);
   assert.equal(report.rows.filter(row => row.itemName === 'ATTA 1KG').length, 1);
   assert.equal(report.rows.some(row => row.itemCode === 'OTHER'), false);
   assert.equal(report.rows.find(row => row.itemCode === 'SELECT').salesQty, 4);

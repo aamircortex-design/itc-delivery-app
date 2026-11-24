@@ -2947,22 +2947,21 @@ function canonicalAtProduct(product) {
   if (/RAGI/.test(name) && hasPackSize(name, 500, weight)) {
     return { ...product, category: 'BC', itemCode: '', itemName: 'ATTA RAGI 500G' };
   }
-  const category = String(product.category || '').trim().toUpperCase();
+  if (product.category !== 'AT') return product;
   const merged = itemName => ({ ...product, category: 'AT', itemCode: '', itemName });
+  if (weight === 2) return merged('ATTA 2KG');
+  if (weight === 5 && /SELECT/.test(name)) return merged('ATTA SELECT 5KG');
+  if (weight === 5 && /MULTIGRAIN/.test(name)) return merged('ATTA MULTIGRAINS 5KG');
   if (weight === 1 && (
     ['FATSG001', 'FATSG001SW'].includes(String(product.itemCode || '').trim().toUpperCase()) ||
     /ATTA\s+WITH\s+SPECIAL\s+GRAINS/.test(name)
   )) return merged('ATTA HIGH PROTEIN 1KG');
   if (weight === 1 && /HIGH\s*PROTEIN|HI[\s-]?PRO|PROTEIN/.test(name)) return merged('ATTA HIGH PROTEIN 1KG');
   if (/\bSRC\b|SUGAR RELEASE|SUGRA RELEASE/.test(name)) return merged('ATTA SRC 1KG');
-  if (weight === 1 && /\bAT(?:TA)?\b/.test(name) &&
+  if (weight === 1 && /ATTA|\bAT\b|SUPERIOR|MP(?=AT|[^A-Z]|$)/.test(name) &&
       !/MULTIGRAIN|SELECT|RAGI|MILLETS|PROTEIN|SRC|SUGAR RELEASE|SUGRA RELEASE/.test(name)) {
     return merged('ATTA 1KG');
   }
-  if (category !== 'AT' && !category.includes('06 ATTA')) return product;
-  if (weight === 2) return merged('ATTA 2KG');
-  if (weight === 5 && /SELECT/.test(name)) return merged('ATTA SELECT 5KG');
-  if (weight === 5 && /MULTIGRAIN/.test(name)) return merged('ATTA MULTIGRAINS 5KG');
   return product;
 }
 
