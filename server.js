@@ -4327,9 +4327,10 @@ app.get('/api/bills/export', async (req, res) => {
          bills.delivery_date = ?
          OR (bills.delivery_date = '' AND substr(bills.created_at, 1, 10) = ?)
          OR (bills.status = 'Not supplied' AND bills.not_supplied_from_date <= ?)
+         OR (bills.status IN ('Completed', 'Returned') AND bills.completed_delivery_date = ?)
        )
        ORDER BY bills.bill_no`,
-      [req.user.companyId, selectedDate, selectedDate, selectedDate]
+      [req.user.companyId, selectedDate, selectedDate, selectedDate, selectedDate]
     );
 
     if (!bills.length) {
@@ -4608,8 +4609,8 @@ app.post('/api/bills/not-supplied', async (req, res) => {
 });
 
 app.post('/api/bills/bulk-delivered', async (req, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Only an administrator can mark multiple bills fully delivered.' });
+  if (!['admin', 'manager'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Only administrators and managers can mark multiple bills fully delivered.' });
   }
   const billIds = req.body?.billIds;
   if (
@@ -4621,8 +4622,12 @@ app.post('/api/bills/bulk-delivered', async (req, res) => {
   ) {
     return res.status(400).json({ error: 'Choose between 1 and 5000 valid bills.' });
   }
+  if (req.body.deliveryDate !== undefined && !normalizeDeliveryDate(req.body.deliveryDate)) {
+    return res.status(400).json({ error: 'Choose a valid delivery date.' });
+  }
 
   const ids = billIds.map(Number);
+  const completionDate = normalizeDeliveryDate(req.body.deliveryDate) || new Date().toISOString().slice(0, 10);
   const placeholders = ids.map(() => '?').join(', ');
   const db = req.app.locals.db;
   let transactionOpen = false;
@@ -4662,9 +4667,10 @@ app.post('/api/bills/bulk-delivered', async (req, res) => {
            updated_at = CURRENT_TIMESTAMP,
            progress_started_at = COALESCE(progress_started_at, ?),
            progress_updated_at = ?,
-           completed_at = COALESCE(completed_at, ?)
+           completed_at = COALESCE(completed_at, ?),
+           completed_delivery_date = COALESCE(completed_delivery_date, ?)
          WHERE company_id = ? AND id IN (${updatePlaceholders})`,
-        [now, now, now, req.user.companyId, ...updatable]
+        [now, now, now, completionDate, req.user.companyId, ...updatable]
       );
     }
     await db.exec('COMMIT');
@@ -4686,6 +4692,10 @@ app.post('/api/bills/bulk-delivered', async (req, res) => {
 app.post('/api/bills/reconcile', async (req, res) => {
   const { billId, items } = req.body;
   const db = req.app.locals.db;
+  if (req.body.deliveryDate !== undefined && !normalizeDeliveryDate(req.body.deliveryDate)) {
+    return res.status(400).json({ error: 'Choose a valid delivery date.' });
+  }
+  const completionDate = normalizeDeliveryDate(req.body.deliveryDate) || new Date().toISOString().slice(0, 10);
 
   if (!Number.isSafeInteger(Number(billId)) || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'A valid bill and at least one item are required.' });
@@ -4766,6 +4776,10 @@ app.post('/api/bills/reconcile', async (req, res) => {
          completed_at = CASE
            WHEN ? THEN COALESCE(completed_at, ?)
            ELSE NULL
+         END,
+         completed_delivery_date = CASE
+           WHEN ? THEN COALESCE(completed_delivery_date, ?)
+           ELSE NULL
          END
        WHERE id = ? AND company_id = ?`,
       [
@@ -4775,6 +4789,8 @@ app.post('/api/bills/reconcile', async (req, res) => {
         progressUpdatedAt,
         completed ? 1 : 0,
         progressUpdatedAt,
+        completed ? 1 : 0,
+        completionDate,
         Number(billId),
         req.user.companyId
       ]

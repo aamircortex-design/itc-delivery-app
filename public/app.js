@@ -139,7 +139,9 @@ function getSelectedDayDeliveries() {
     const isCarryover = bill.status === 'Not supplied' &&
       /^\d{4}-\d{2}-\d{2}$/.test(bill.not_supplied_from_date || '') &&
       bill.not_supplied_from_date <= selectedDeliveryDate;
-    return isScheduledForDate || isCarryover;
+    const isCompletedCarryover = ['Completed', 'Returned'].includes(bill.status) &&
+      bill.completed_delivery_date === selectedDeliveryDate;
+    return isScheduledForDate || isCarryover || isCompletedCarryover;
   });
 }
 
@@ -267,7 +269,12 @@ function renderRows() {
       bill.progress_updated_at ? `Updated ${formatDateTime(bill.progress_updated_at)}` : '',
       duration ? `${bill.completed_at ? 'Duration' : 'Elapsed'} ${duration}` : ''
     ].filter(Boolean);
-    const displayedDeliveryDate = bill.status === 'Not supplied' &&
+    const completedFromEarlierDate = ['Completed', 'Returned'].includes(bill.status) &&
+      bill.completed_delivery_date === selectedDeliveryDate &&
+      getBillDeliveryDate(bill) < selectedDeliveryDate;
+    const displayedDeliveryDate = completedFromEarlierDate
+      ? `Delivered · carried from ${formatDate(getBillDeliveryDate(bill))}`
+      : bill.status === 'Not supplied' &&
       bill.not_supplied_from_date < selectedDeliveryDate
       ? `Carried from ${formatDate(bill.not_supplied_from_date)}`
       : formatDate(bill.delivery_date || bill.created_at);
@@ -345,7 +352,13 @@ async function loadDeliveries() {
   } else if (/^\d{4}-\d{2}-\d{2}$/.test(savedDate || '')) {
     selectedDeliveryDate = savedDate;
   } else {
-    const availableDates = deliveries.map(getBillDeliveryDate).filter(Boolean).sort();
+    const availableDates = deliveries
+      .flatMap(bill => [
+        getBillDeliveryDate(bill),
+        ['Completed', 'Returned'].includes(bill.status) ? bill.completed_delivery_date : ''
+      ])
+      .filter(Boolean)
+      .sort();
     selectedDeliveryDate = hasActiveCarryover
       ? today
       : availableDates.filter(date => date <= today).pop() || today;
@@ -394,7 +407,7 @@ async function loadCurrentUser() {
   document.querySelector('#assigned-header').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#delivery-agent-filter-control').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#bulk-assignment').hidden = !['admin', 'manager'].includes(user.role);
-  document.querySelector('#deliver-selected-bills').hidden = user.role !== 'admin';
+  document.querySelector('#deliver-selected-bills').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#bulk-select-header').hidden = !['admin', 'manager'].includes(user.role);
   document.querySelector('#delivery-heading').textContent = user.role === 'delivery_partner' ? 'My assigned deliveries' : 'All deliveries';
   document.querySelector('#total-copy').textContent = user.role === 'delivery_partner'
@@ -406,12 +419,12 @@ async function loadCurrentUser() {
     ? 'Your assigned deliveries'
     : 'Your deliveries, in one place.';
   document.querySelector('#page-heading-copy').textContent = user.role === 'manager'
-    ? 'Select multiple bills and assign them to a delivery partner together.'
+    ? 'Select multiple bills to assign them or mark them fully delivered together.'
     : user.role === 'delivery_partner'
       ? 'Update delivery progress for the bills assigned to you.'
       : 'Import your order sheet and keep every drop-off on track.';
   document.querySelector('#panel-subtitle').textContent = user.role === 'manager'
-    ? 'Select one or more bills below to assign them to a delivery partner.'
+    ? 'Select one or more bills below to assign them or mark them fully delivered.'
     : user.role === 'delivery_partner'
       ? 'Only deliveries assigned to your account are shown.'
       : 'View orders and update delivery progress for the selected day.';
@@ -2377,7 +2390,7 @@ async function markSelectedBillsDelivered() {
     const result = await requestJson('/api/bills/bulk-delivered', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ billIds })
+      body: JSON.stringify({ billIds, deliveryDate: selectedDeliveryDate })
     });
     selectedBillIds.clear();
     document.querySelector('#select-visible-bills').checked = false;
@@ -2793,7 +2806,7 @@ async function saveReconciliation(event) {
     await requestJson('/api/bills/reconcile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ billId: activeBill.id, items })
+      body: JSON.stringify({ billId: activeBill.id, items, deliveryDate: selectedDeliveryDate })
     });
     await loadDeliveries();
     reconcileDialog.close();

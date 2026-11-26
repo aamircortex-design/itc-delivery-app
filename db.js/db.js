@@ -48,6 +48,7 @@ async function initDb() {
       progress_started_at TEXT,
       progress_updated_at TEXT,
       completed_at TEXT,
+      completed_delivery_date TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       UNIQUE (company_id, bill_no)
@@ -505,6 +506,10 @@ async function initDb() {
   if (!billColumns.some(column => column.name === 'completed_at')) {
     await db.exec('ALTER TABLE bills ADD COLUMN completed_at TEXT');
   }
+  if (!billColumns.some(column => column.name === 'completed_delivery_date')) {
+    await db.exec('ALTER TABLE bills ADD COLUMN completed_delivery_date TEXT');
+    await db.exec("UPDATE bills SET completed_delivery_date = substr(completed_at, 1, 10) WHERE completed_at IS NOT NULL AND status IN ('Completed', 'Returned')");
+  }
 
   const legacyCompany = await db.get('SELECT id FROM companies ORDER BY id LIMIT 1');
   let legacyCompanyId = legacyCompany?.id;
@@ -582,14 +587,15 @@ async function initDb() {
             progress_started_at TEXT,
             progress_updated_at TEXT,
             completed_at TEXT,
+            completed_delivery_date TEXT,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             assigned_to INTEGER REFERENCES users(id) ON DELETE SET NULL,
             UNIQUE (company_id, bill_no)
           );
           INSERT INTO bills_updated
-            (id, company_id, bill_no, outlet_name, address, salesman, delivery_date, not_supplied_from_date, status, progress_started_at, progress_updated_at, completed_at, created_at, updated_at, assigned_to)
-          SELECT id, company_id, bill_no, outlet_name, address, salesman, delivery_date, not_supplied_from_date, status, progress_started_at, progress_updated_at, completed_at, created_at, updated_at, assigned_to
+            (id, company_id, bill_no, outlet_name, address, salesman, delivery_date, not_supplied_from_date, status, progress_started_at, progress_updated_at, completed_at, completed_delivery_date, created_at, updated_at, assigned_to)
+          SELECT id, company_id, bill_no, outlet_name, address, salesman, delivery_date, not_supplied_from_date, status, progress_started_at, progress_updated_at, completed_at, completed_delivery_date, created_at, updated_at, assigned_to
           FROM bills;
           DROP TABLE bills;
           ALTER TABLE bills_updated RENAME TO bills;
