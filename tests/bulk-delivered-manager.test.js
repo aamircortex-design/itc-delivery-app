@@ -5,7 +5,7 @@ const { strFromU8, unzipSync } = require('fflate');
 const initDb = require('../db.js/db.js');
 const app = require('../server.js');
 
-test('not-supplied bills stay on their scheduled date and completed bills appear only on their delivery date', async t => {
+test('not-supplied bills carry forward and completed bills stay on their scheduled date in exports', async t => {
   const previousDatabasePath = process.env.DATABASE_PATH;
   process.env.DATABASE_PATH = ':memory:';
   const db = await initDb();
@@ -102,9 +102,9 @@ test('not-supplied bills stay on their scheduled date and completed bills appear
   assert.equal(exportResponse.status, 200);
   const workbookFiles = unzipSync(new Uint8Array(await exportResponse.arrayBuffer()));
   const workbookText = Object.values(workbookFiles).map(strFromU8).join('\n');
-  assert.match(workbookText, /B-1/);
-  assert.match(workbookText, /B-2/);
-  assert.doesNotMatch(workbookText, /B-3/);
+  assert.doesNotMatch(workbookText, /B-1/);
+  assert.doesNotMatch(workbookText, /B-2/);
+  assert.match(workbookText, /B-3/);
 
   const originalDateExportResponse = await fetch(
     'http://127.0.0.1:' + server.address().port + '/api/bills/export?date=2026-11-03',
@@ -114,6 +114,6 @@ test('not-supplied bills stay on their scheduled date and completed bills appear
   const originalDateFiles = unzipSync(new Uint8Array(await originalDateExportResponse.arrayBuffer()));
   const originalDateText = Object.values(originalDateFiles).map(strFromU8).join('\n');
   assert.match(originalDateText, /B-3/);
-  assert.doesNotMatch(originalDateText, /B-1/);
-  assert.doesNotMatch(originalDateText, /B-2/);
+  assert.match(originalDateText, /B-1/);
+  assert.match(originalDateText, /B-2/);
 });

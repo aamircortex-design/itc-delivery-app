@@ -135,12 +135,11 @@ function getBillDeliveryDate(bill) {
 
 function getSelectedDayDeliveries() {
   return deliveries.filter(bill => {
-    const completionDate = ['Completed', 'Returned'].includes(bill.status) &&
-      /^\d{4}-\d{2}-\d{2}$/.test(bill.completed_delivery_date || '')
-      ? bill.completed_delivery_date
-      : '';
-    const isScheduledForDate = !completionDate && getBillDeliveryDate(bill) === selectedDeliveryDate;
-    return isScheduledForDate || completionDate === selectedDeliveryDate;
+    const isScheduledForDate = getBillDeliveryDate(bill) === selectedDeliveryDate;
+    const isActiveCarryover = bill.status === 'Not supplied' &&
+      /^\d{4}-\d{2}-\d{2}$/.test(bill.not_supplied_from_date || '') &&
+      bill.not_supplied_from_date <= selectedDeliveryDate;
+    return isScheduledForDate || isActiveCarryover;
   });
 }
 
@@ -268,11 +267,11 @@ function renderRows() {
       bill.progress_updated_at ? `Updated ${formatDateTime(bill.progress_updated_at)}` : '',
       duration ? `${bill.completed_at ? 'Duration' : 'Elapsed'} ${duration}` : ''
     ].filter(Boolean);
-    const completedOnDifferentDate = ['Completed', 'Returned'].includes(bill.status) &&
-      bill.completed_delivery_date === selectedDeliveryDate &&
-      getBillDeliveryDate(bill) !== selectedDeliveryDate;
-    const displayedDeliveryDate = completedOnDifferentDate
-      ? `Delivered · originally scheduled ${formatDate(getBillDeliveryDate(bill))}`
+    const carriedFromEarlierDate = bill.status === 'Not supplied' &&
+      /^\d{4}-\d{2}-\d{2}$/.test(bill.not_supplied_from_date || '') &&
+      bill.not_supplied_from_date < selectedDeliveryDate;
+    const displayedDeliveryDate = carriedFromEarlierDate
+      ? `Carried from ${formatDate(bill.not_supplied_from_date)}`
       : formatDate(bill.delivery_date || bill.created_at);
     const salesmanDetails = bill.salesman
       ? `<span class="outlet-salesman">Salesman: ${escapeHtml(bill.salesman)}</span>`
@@ -341,17 +340,23 @@ async function loadDeliveries() {
   deliveries = result;
   const savedDate = localStorage.getItem('tafDistiDesk.selectedDeliveryDate');
   const today = getLocalDateValue();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(savedDate || '')) {
+  const hasActiveCarryover = deliveries.some(bill =>
+    bill.status === 'Not supplied' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(bill.not_supplied_from_date || '') &&
+    bill.not_supplied_from_date <= today
+  );
+  if (!hasInitializedDeliveryDate && hasActiveCarryover && /^\d{4}-\d{2}-\d{2}$/.test(savedDate || '') && savedDate < today) {
+    selectedDeliveryDate = today;
+  } else if (/^\d{4}-\d{2}-\d{2}$/.test(savedDate || '')) {
     selectedDeliveryDate = savedDate;
   } else {
     const availableDates = deliveries
-      .flatMap(bill => [
-        getBillDeliveryDate(bill),
-        ['Completed', 'Returned'].includes(bill.status) ? bill.completed_delivery_date : ''
-      ])
+      .map(getBillDeliveryDate)
       .filter(Boolean)
       .sort();
-    selectedDeliveryDate = availableDates.filter(date => date <= today).pop() || today;
+    selectedDeliveryDate = hasActiveCarryover
+      ? today
+      : availableDates.filter(date => date <= today).pop() || today;
   }
   hasInitializedDeliveryDate = true;
   document.querySelector('#dashboard-date').value = selectedDeliveryDate;
@@ -2624,8 +2629,8 @@ function openReconcileDialog(bill) {
   document.querySelector('#reconcile-subtitle').textContent = `Bill #${bill.bill_no} · ${bill.outlet_name}`;
   document.querySelector('#mark-not-supplied').hidden = currentUser?.role === 'manager';
   document.querySelector('#not-supplied-note').textContent = bill.status === 'Not supplied'
-    ? 'This bill remains on its original scheduled date until its outstanding quantity is resolved.'
-    : 'The remaining quantity stays on its scheduled date. If delivered later, the bill will appear on the delivery date only.';
+    ? `This bill is carried forward from ${formatDate(bill.not_supplied_from_date)} for assignment until resolved.`
+    : 'The remaining quantity will stay on the scheduled date and carry forward on later dates for assignment until resolved.';
   document.querySelector('#not-supplied-error').hidden = true;
   document.querySelector('#reconcile-items').innerHTML = bill.items.map(item => `
     <div class="reconcile-row" data-item-row="${item.id}">
@@ -2674,8 +2679,8 @@ function updateNotSuppliedAction() {
   button.title = hasUnsavedChanges
     ? 'Save or discard your quantity edits before marking this bill not supplied.'
     : remaining === 0
-      ? 'There is no outstanding quantity.'
-      : 'Keep this bill on its scheduled date until its remaining quantity is resolved.';
+      ? 'There is no outstanding quantity to carry forward.'
+      : 'Keep this bill on subsequent dates for assignment until its remaining quantity is resolved.';
 }
 
 async function markBillNotSupplied() {

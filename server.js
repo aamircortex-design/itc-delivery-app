@@ -4324,15 +4324,13 @@ app.get('/api/bills/export', async (req, res) => {
        FROM bills
        LEFT JOIN users ON users.id = bills.assigned_to
        WHERE bills.company_id = ? AND (
-         (
-           (CASE WHEN bills.delivery_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-                 THEN bills.delivery_date ELSE substr(bills.created_at, 1, 10) END) = ?
-           AND NOT (
-             bills.status IN ('Completed', 'Returned')
-             AND bills.completed_delivery_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-           )
+         (CASE WHEN bills.delivery_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+               THEN bills.delivery_date ELSE substr(bills.created_at, 1, 10) END) = ?
+         OR (
+           bills.status = 'Not supplied'
+           AND bills.not_supplied_from_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+           AND bills.not_supplied_from_date <= ?
          )
-         OR (bills.status IN ('Completed', 'Returned') AND bills.completed_delivery_date = ?)
        )
        ORDER BY bills.bill_no`,
       [req.user.companyId, selectedDate, selectedDate]
@@ -4488,15 +4486,13 @@ app.get('/api/bills', async (req, res) => {
           `SELECT bills.*, users.full_name AS assigned_partner_name, users.id AS assigned_to
            FROM bills LEFT JOIN users ON users.id = bills.assigned_to
            WHERE bills.company_id = ? AND (
-             (
-               (CASE WHEN bills.delivery_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-                     THEN bills.delivery_date ELSE substr(bills.created_at, 1, 10) END) = ?
-               AND NOT (
-                 bills.status IN ('Completed', 'Returned')
-                 AND bills.completed_delivery_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-               )
+             (CASE WHEN bills.delivery_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+                   THEN bills.delivery_date ELSE substr(bills.created_at, 1, 10) END) = ?
+             OR (
+               bills.status = 'Not supplied'
+               AND bills.not_supplied_from_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+               AND bills.not_supplied_from_date <= ?
              )
-             OR (bills.status IN ('Completed', 'Returned') AND bills.completed_delivery_date = ?)
            )
            ORDER BY bills.id DESC`,
           [req.user.companyId, managerDate, managerDate]
@@ -4614,7 +4610,7 @@ app.post('/api/bills/not-supplied', async (req, res) => {
     if (remaining === 0 || status === 'Completed' || status === 'Returned') {
       await db.exec('ROLLBACK');
       transactionOpen = false;
-      return res.status(400).json({ error: 'This bill has no outstanding quantity.' });
+      return res.status(400).json({ error: 'This bill has no outstanding quantity to carry forward.' });
     }
 
     const notSuppliedFromDate = await db.get(
@@ -4630,7 +4626,7 @@ app.post('/api/bills/not-supplied', async (req, res) => {
     );
     await db.exec('COMMIT');
     transactionOpen = false;
-    res.json({ message: 'Bill marked not supplied. It will remain on its scheduled date until resolved.', status: 'Not supplied', notSuppliedFromDate: effectiveDate });
+    res.json({ message: 'Bill marked not supplied and carried forward until its outstanding quantity is resolved.', status: 'Not supplied', notSuppliedFromDate: effectiveDate });
   } catch (error) {
     if (transactionOpen) await db.exec('ROLLBACK');
     console.error('Could not mark delivery not supplied:', error);

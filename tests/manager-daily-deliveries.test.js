@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const initDb = require('../db.js/db.js');
 const app = require('../server.js');
 
-test('manager daily list keeps unsupplied bills on their scheduled date and completed bills on their completion date', async t => {
+test('manager daily list carries active not-supplied bills forward but keeps completed bills on their scheduled date', async t => {
   const previousDatabasePath = process.env.DATABASE_PATH;
   process.env.DATABASE_PATH = ':memory:';
   const db = await initDb();
@@ -61,7 +61,7 @@ test('manager daily list keeps unsupplied bills on their scheduled date and comp
   const managerBills = await response.json();
   assert.deepEqual(
     managerBills.map(bill => bill.bill_no).sort(),
-    ['B-DELIVERED-TODAY', 'B-SCHEDULED-TODAY']
+    ['B-CARRYOVER', 'B-SCHEDULED-TODAY']
   );
 
   const originalDateResponse = await fetch(
@@ -72,8 +72,15 @@ test('manager daily list keeps unsupplied bills on their scheduled date and comp
   const originalDateBills = await originalDateResponse.json();
   assert.deepEqual(
     originalDateBills.map(bill => bill.bill_no).sort(),
-    ['B-CARRYOVER', 'B-EMPTY-CARRYOVER-DATE', 'B-FUTURE-CARRYOVER', 'B-INVALID-CARRYOVER-DATE']
+    ['B-CARRYOVER', 'B-DELIVERED-TODAY', 'B-EMPTY-CARRYOVER-DATE', 'B-FUTURE-CARRYOVER', 'B-INVALID-CARRYOVER-DATE', 'B-OLD-COMPLETED']
   );
+
+  const completedDateResponse = await fetch(
+    'http://127.0.0.1:' + server.address().port + '/api/bills?date=2026-11-22',
+    { headers: { Cookie: 'taf_disti_session=manager-daily-session' } }
+  );
+  assert.equal(completedDateResponse.status, 200);
+  assert.deepEqual(await completedDateResponse.json(), []);
 
   const invalidDateResponse = await fetch(
     `http://127.0.0.1:${server.address().port}/api/bills?date=not-a-date`,
