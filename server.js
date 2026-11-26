@@ -4464,6 +4464,13 @@ app.get('/api/bills/export', async (req, res) => {
 app.get('/api/bills', async (req, res) => {
   try {
     const db = req.app.locals.db;
+    if (req.user.role === 'manager' && req.query.date !== undefined && !normalizeDeliveryDate(req.query.date)) {
+      return res.status(400).json({ error: 'Choose a valid delivery date.' });
+    }
+
+    const managerDate = req.user.role === 'manager' && req.query.date !== undefined
+      ? normalizeDeliveryDate(req.query.date)
+      : null;
     const bills = req.user.role === 'delivery_partner'
       ? await db.all(
         `SELECT bills.*, users.full_name AS assigned_partner_name, users.id AS assigned_to
@@ -4471,6 +4478,19 @@ app.get('/api/bills', async (req, res) => {
          WHERE bills.company_id = ? AND bills.assigned_to = ? ORDER BY bills.id DESC`,
         [req.user.companyId, req.user.id]
       )
+      : req.user.role === 'manager' && managerDate
+        ? await db.all(
+          `SELECT bills.*, users.full_name AS assigned_partner_name, users.id AS assigned_to
+           FROM bills LEFT JOIN users ON users.id = bills.assigned_to
+           WHERE bills.company_id = ? AND (
+             bills.delivery_date = ?
+             OR (bills.delivery_date = '' AND substr(bills.created_at, 1, 10) = ?)
+             OR (bills.status = 'Not supplied' AND bills.not_supplied_from_date <= ?)
+             OR (bills.status IN ('Completed', 'Returned') AND bills.completed_delivery_date = ?)
+           )
+           ORDER BY bills.id DESC`,
+          [req.user.companyId, managerDate, managerDate, managerDate, managerDate]
+        )
       : await db.all(
         `SELECT bills.*, users.full_name AS assigned_partner_name, users.id AS assigned_to
          FROM bills LEFT JOIN users ON users.id = bills.assigned_to

@@ -335,7 +335,10 @@ async function loadUploadLock() {
 
 async function loadDeliveries() {
   loadUploadLock();
-  const result = await requestJson('/api/bills');
+  const billsUrl = currentUser?.role === 'manager' && hasInitializedDeliveryDate
+    ? `/api/bills?date=${encodeURIComponent(selectedDeliveryDate)}`
+    : '/api/bills';
+  const result = await requestJson(billsUrl);
   if (!Array.isArray(result)) {
     throw new Error('The server returned an unexpected delivery list.');
   }
@@ -3154,7 +3157,11 @@ document.querySelector('#dashboard-date').addEventListener('change', event => {
   selectedDeliveryDate = event.currentTarget.value;
   localStorage.setItem('tafDistiDesk.selectedDeliveryDate', selectedDeliveryDate);
   document.querySelector('#status-filter').value = 'All';
-  renderRows();
+  if (currentUser?.role === 'manager') {
+    loadDeliveries().catch(error => showToast(`Could not load deliveries for this date: ${error.message}`, true));
+  } else {
+    renderRows();
+  }
   if (damageDialog.open) loadDamageReports();
 });
 document.querySelectorAll('.side-nav .nav-link[href^="#"]').forEach(link => {
