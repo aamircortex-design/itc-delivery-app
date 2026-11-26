@@ -5,7 +5,7 @@ const { strFromU8, unzipSync } = require('fflate');
 const initDb = require('../db.js/db.js');
 const app = require('../server.js');
 
-test('completed carryover bills appear in delivery-day exports', async t => {
+test('not-supplied bills stay on their scheduled date and completed bills appear only on their delivery date', async t => {
   const previousDatabasePath = process.env.DATABASE_PATH;
   process.env.DATABASE_PATH = ':memory:';
   const db = await initDb();
@@ -34,6 +34,15 @@ test('completed carryover bills appear in delivery-day exports', async t => {
     `INSERT INTO bills (company_id, bill_no, outlet_name, address, delivery_date, status, not_supplied_from_date)
      VALUES (1, 'B-1', 'Outlet', 'Address', '2026-11-03', 'Not supplied', ?)`,
     [deliveryDate]
+  );
+  const notSuppliedBill = await db.run(
+    `INSERT INTO bills (company_id, bill_no, outlet_name, address, delivery_date, status, not_supplied_from_date)
+     VALUES (1, 'B-3', 'Outlet 3', 'Address 3', '2026-11-03', 'Not supplied', ?)`,
+    [deliveryDate]
+  );
+  await db.run(
+    'INSERT INTO bill_items (bill_id, item_name, qty_ordered, qty_delivered) VALUES (?, ?, ?, ?)',
+    [notSuppliedBill.lastID, 'Product 3', 4, 0]
   );
   await db.run(
     'INSERT INTO bill_items (bill_id, item_name, qty_ordered, qty_delivered) VALUES (?, ?, ?, ?)',
@@ -95,4 +104,16 @@ test('completed carryover bills appear in delivery-day exports', async t => {
   const workbookText = Object.values(workbookFiles).map(strFromU8).join('\n');
   assert.match(workbookText, /B-1/);
   assert.match(workbookText, /B-2/);
+  assert.doesNotMatch(workbookText, /B-3/);
+
+  const originalDateExportResponse = await fetch(
+    'http://127.0.0.1:' + server.address().port + '/api/bills/export?date=2026-11-03',
+    { headers: { Cookie: `taf_disti_session=${managerToken}` } }
+  );
+  assert.equal(originalDateExportResponse.status, 200);
+  const originalDateFiles = unzipSync(new Uint8Array(await originalDateExportResponse.arrayBuffer()));
+  const originalDateText = Object.values(originalDateFiles).map(strFromU8).join('\n');
+  assert.match(originalDateText, /B-3/);
+  assert.doesNotMatch(originalDateText, /B-1/);
+  assert.doesNotMatch(originalDateText, /B-2/);
 });
