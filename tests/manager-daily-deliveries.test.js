@@ -41,7 +41,9 @@ test('manager daily list excludes historical completed bills but keeps that day 
     ['B-DELIVERED-TODAY', '2026-11-20', 'Completed', null, selectedDate],
     ['B-SCHEDULED-TODAY', selectedDate, 'Pending', null, null],
     ['B-CARRYOVER', '2026-11-20', 'Not supplied', selectedDate, null],
-    ['B-FUTURE-CARRYOVER', '2026-11-20', 'Not supplied', '2026-11-27', null]
+    ['B-FUTURE-CARRYOVER', '2026-11-20', 'Not supplied', '2026-11-27', null],
+    ['B-EMPTY-CARRYOVER-DATE', '2026-11-20', 'Not supplied', '', null],
+    ['B-INVALID-CARRYOVER-DATE', '2026-11-20', 'Not supplied', 'yesterday', null]
   ];
   for (const [billNo, deliveryDate, status, notSuppliedFromDate, completedDate] of rows) {
     await db.run(

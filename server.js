@@ -4324,13 +4324,17 @@ app.get('/api/bills/export', async (req, res) => {
        FROM bills
        LEFT JOIN users ON users.id = bills.assigned_to
        WHERE bills.company_id = ? AND (
-         bills.delivery_date = ?
-         OR (bills.delivery_date = '' AND substr(bills.created_at, 1, 10) = ?)
-         OR (bills.status = 'Not supplied' AND bills.not_supplied_from_date <= ?)
+         (CASE WHEN bills.delivery_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+               THEN bills.delivery_date ELSE substr(bills.created_at, 1, 10) END) = ?
+         OR (
+           bills.status = 'Not supplied'
+           AND bills.not_supplied_from_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+           AND bills.not_supplied_from_date <= ?
+         )
          OR (bills.status IN ('Completed', 'Returned') AND bills.completed_delivery_date = ?)
        )
        ORDER BY bills.bill_no`,
-      [req.user.companyId, selectedDate, selectedDate, selectedDate, selectedDate]
+      [req.user.companyId, selectedDate, selectedDate, selectedDate]
     );
 
     if (!bills.length) {
@@ -4483,13 +4487,17 @@ app.get('/api/bills', async (req, res) => {
           `SELECT bills.*, users.full_name AS assigned_partner_name, users.id AS assigned_to
            FROM bills LEFT JOIN users ON users.id = bills.assigned_to
            WHERE bills.company_id = ? AND (
-             bills.delivery_date = ?
-             OR (bills.delivery_date = '' AND substr(bills.created_at, 1, 10) = ?)
-             OR (bills.status = 'Not supplied' AND bills.not_supplied_from_date <= ?)
+             (CASE WHEN bills.delivery_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+                   THEN bills.delivery_date ELSE substr(bills.created_at, 1, 10) END) = ?
+             OR (
+               bills.status = 'Not supplied'
+               AND bills.not_supplied_from_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+               AND bills.not_supplied_from_date <= ?
+             )
              OR (bills.status IN ('Completed', 'Returned') AND bills.completed_delivery_date = ?)
            )
            ORDER BY bills.id DESC`,
-          [req.user.companyId, managerDate, managerDate, managerDate, managerDate]
+          [req.user.companyId, managerDate, managerDate, managerDate]
         )
       : await db.all(
         `SELECT bills.*, users.full_name AS assigned_partner_name, users.id AS assigned_to
